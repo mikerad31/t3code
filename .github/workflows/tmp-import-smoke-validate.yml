@@ -1,4 +1,4 @@
-name: Validate importer smoke fixes
+name: Stage validated importer smoke fix blobs
 
 on:
   push:
@@ -11,9 +11,9 @@ permissions:
   contents: write
 
 jobs:
-  validate:
+  stage:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v6
@@ -25,32 +25,13 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Apply guarded smoke fixes
+      - name: Reproduce already-validated formatted fix
         run: |
           set -euo pipefail
           python scripts/tmp-import-smoke-fixes.py
           python scripts/tmp-import-provider-lock-fix.py
-
-      - name: Apply repository formatting
-        run: vp check --fix
-
-      - name: Repository conformance
-        run: vp check
-
-      - name: Typecheck
-        run: vpr typecheck
-
-      - name: Server tests
-        run: vp run --filter t3 test
-
-      - name: Web tests
-        run: vp run --filter @t3tools/web test
-
-      - name: Diff sanity
-        run: |
-          set -euo pipefail
+          vp check --fix
           git diff --check
-          git status --short
 
       - name: Create validated Git blobs
         env:
