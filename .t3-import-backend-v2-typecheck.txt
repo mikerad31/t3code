@@ -1,0 +1,78 @@
+~/packages/contracts$ tsgo --noEmit ⊘ cache disabled
+~/oxlint-plugin-t3code$ tsgo --noEmit ⊘ cache disabled
+
+~/packages/effect-codex-app-server$ tsgo --noEmit ⊘ cache disabled
+
+~/packages/effect-acp$ tsgo --noEmit ⊘ cache disabled
+
+~/packages/shared$ tsgo --noEmit ⊘ cache disabled
+
+~/apps/marketing$ astro check ⊘ cache disabled
+[2m17:39:37[22m [34m[types][39m Generated [2m117ms[22m
+[2m17:39:37[22m [34m[check][39m Getting diagnostics for Astro files in /home/runner/work/t3code/t3code/apps/marketing...
+Result (16 files): 
+- 0 errors
+- 0 warnings
+- 0 hints
+
+
+~/packages/client-runtime$ tsgo --noEmit ⊘ cache disabled
+src/relay/discovery.ts(243,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+
+~/packages/ssh$ tsgo --noEmit ⊘ cache disabled
+
+~/packages/tailscale$ tsgo --noEmit ⊘ cache disabled
+
+~/apps/web$ tsgo --noEmit ⊘ cache disabled
+
+~/apps/mobile$ tsc --noEmit ⊘ cache disabled
+
+~/infra/relay$ tsgo --noEmit ⊘ cache disabled
+
+~/scripts$ tsgo --noEmit ⊘ cache disabled
+build-desktop-artifact.ts(1659,7): suggestion TS377092: These 2 consecutive `catchTag` transformations can be collapsed into a single `catchTags` call. effect(multipleCatchTag)
+
+~/apps/desktop$ tsgo --noEmit ⊘ cache disabled
+src/backend/DesktopBackendPool.test.ts(131,7): suggestion TS377017: This Effect.gen contains a single return statement. effect(unnecessaryEffectGen)
+src/wsl/DesktopWslEnvironment.ts(856,11): suggestion TS377047: This expression can be rewritten in the reusable function form `Effect.fn("desktop.wsl.getUserHome")(function*(distro) { ... })`. effect(effectFnOpportunity)
+
+~/apps/server$ tsgo --noEmit ⊘ cache disabled
+
+src/orchestration/decider.ts(537,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(548,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(558,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(664,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(676,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(688,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(855,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/decider.ts(1231,18): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/workflowScriptQuery.ts(35,12): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/workflowScriptQuery.ts(63,12): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/orchestration/workflowScriptQuery.ts(68,12): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/provider/Drivers/CodexDriver.ts(171,9): error TS2322: Type '{ spawn(command: Command): Effect<ChildProcessHandle, PlatformError, Scope>; exitCode(command: Command): Effect<...>; streamString(command: Command, options?: { ...; } | undefined): Stream<...>; streamLines(command: Command, options?: { ...; } | undefined): Stream<...>; lines(command: Command, options?: { ...; } | u...' is not assignable to type 'ChildProcessSpawner'.
+  Type '{ spawn(command: Command): Effect<ChildProcessHandle, PlatformError, Scope>; exitCode(command: Command): Effect<...>; streamString(command: Command, options?: { ...; } | undefined): Stream<...>; streamLines(command: Command, options?: { ...; } | undefined): Stream<...>; lines(command: Command, options?: { ...; } | u...' is missing the following properties from type 'Shape<"effect/process/ChildProcessSpawner", { spawn(command: Command): Effect<ChildProcessHandle, PlatformError, Scope>; ... 4 more ...; string(command: Command, options?: { ...; } | undefined): Effect<...>; }>': Service, [ServiceTypeId], key
+src/provider/Layers/ClaudeAdapter.ts(4711,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/provider/Layers/CodexThreadImport.ts(142,5): error TS2375: Type 'Effect<A, ProviderThreadImportError, unknown>' is not assignable to type 'Effect<A, ProviderThreadImportError, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Type 'unknown' is not assignable to type 'never'.
+src/provider/Layers/CodexThreadImport.ts(142,5): error TS377004: This Effect requires a service that is missing from the expected Effect context: `unknown`. effect(missingEffectContext)
+src/provider/Layers/CodexThreadImport.ts(148,42): error TS2339: Property 'spawn' does not exist on type 'ChildProcessSpawner'.
+src/provider/Layers/CodexThreadImport.ts(163,21): error TS377030: This has unknown in the error channel which is not recommended.
+Having an unknown or any error type is not useful. Consider instead using specific error types baked by Data.TaggedError for example. effect(anyUnknownInErrorContext)
+src/provider/Layers/CodexThreadImport.ts(185,15): error TS7022: 'response' implicitly has type 'any' because it does not have a type annotation and is referenced directly or indirectly in its own initializer.
+src/provider/Layers/CodexThreadImport.ts(185,63): error TS2345: Argument of type '{ cursor: string | undefined; limit: number; sortKey: "updated_at"; sortDirection: "desc"; archived: boolean; cwd: string; sourceKinds: ("appServer" | "cli" | "vscode")[]; }' is not assignable to parameter of type 'V2ThreadListParams'.
+  Types of property 'cursor' are incompatible.
+    Type 'string | undefined' is not assignable to type 'string | null'.
+      Type 'undefined' is not assignable to type 'string | null'.
+src/provider/Layers/CodexThreadImport.ts(231,21): error TS377023: Global 'Error' loses type safety as untagged errors merge together in the Effect failure channel. Consider using a tagged error and optionally wrapping the original in a 'cause' property. effect(globalErrorInEffectFailure)
+src/pullRequest/GitLabPullRequestCli.ts(1147,18): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/threadImport/ThreadImportService.ts(173,16): suggestion TS377019: This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`. effect(unnecessaryFailYieldableError)
+src/threadImport/ThreadImportService.ts(299,11): error TS2345: Argument of type '{ readonly instanceId: string & Brand<"ProviderInstanceId">; readonly driver: string & Brand<"ProviderDriverKind">; readonly displayName?: string | undefined; ... 18 more ...; readonly updateState?: { ...; }; }' is not assignable to parameter of type '{ readonly models: readonly { readonly slug: string; readonly isDefault?: boolean; }[]; }'.
+  Types of property 'models' are incompatible.
+    Type 'readonly { readonly slug: string; readonly name: string; readonly shortName?: string | undefined; readonly subProvider?: string | undefined; readonly isCustom: boolean; readonly isDefault?: boolean | undefined; readonly isLegacy?: boolean | undefined; readonly capabilities: { ...; } | null; }[]' is not assignable to type 'readonly { readonly slug: string; readonly isDefault?: boolean; }[]'.
+      Type '{ readonly slug: string; readonly name: string; readonly shortName?: string | undefined; readonly subProvider?: string | undefined; readonly isCustom: boolean; readonly isDefault?: boolean | undefined; readonly isLegacy?: boolean | undefined; readonly capabilities: { ...; } | null; }' is not assignable to type '{ readonly slug: string; readonly isDefault?: boolean; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+        Types of property 'isDefault' are incompatible.
+          Type 'boolean | undefined' is not assignable to type 'boolean'.
+            Type 'undefined' is not assignable to type 'boolean'.
+
+---
+vp run: 0/15 cache hit (0%), 1 failed. (Run `vp run --last-details` for full details)

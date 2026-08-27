@@ -55,7 +55,8 @@ function hasThreadImport(instance: ProviderInstance): instance is ImportCapableP
 function canonicalCodexInstances(instances: ReadonlyArray<ProviderInstance>) {
   const byContinuationKey = new Map<string, ImportCapableProviderInstance>();
   for (const instance of instances) {
-    if (instance.driverKind !== CODEX_DRIVER || !instance.enabled || !hasThreadImport(instance)) continue;
+    if (instance.driverKind !== CODEX_DRIVER || !instance.enabled || !hasThreadImport(instance))
+      continue;
     const key = instance.continuationIdentity.continuationKey;
     if (!byContinuationKey.has(key)) byContinuationKey.set(key, instance);
   }
@@ -93,7 +94,11 @@ function importedMessageId(input: {
 
 function importMessages(
   candidateId: ThreadImportCandidateId,
-  messages: ReadonlyArray<{ readonly role: "user" | "assistant" | "system"; readonly text: string; readonly createdAt: string }>,
+  messages: ReadonlyArray<{
+    readonly role: "user" | "assistant" | "system";
+    readonly text: string;
+    readonly createdAt: string;
+  }>,
 ): ReadonlyArray<ThreadImportMessage> {
   return messages.map((message, index) => ({
     id: importedMessageId({
@@ -110,7 +115,9 @@ function importMessages(
 
 function modelSelectionFor(
   instanceId: ProviderInstanceId,
-  providerSnapshot: { readonly models: ReadonlyArray<{ readonly slug: string; readonly isDefault?: boolean }> },
+  providerSnapshot: {
+    readonly models: ReadonlyArray<{ readonly slug: string; readonly isDefault?: boolean }>;
+  },
   fallback: ModelSelection | null,
 ): ModelSelection {
   const model =
@@ -137,9 +144,10 @@ export interface ThreadImportServiceShape {
   ) => Effect.Effect<ThreadImportCommitResult, ThreadImportError>;
 }
 
-export class ThreadImportService extends Context.Service<ThreadImportService, ThreadImportServiceShape>()(
-  "t3/threadImport/ThreadImportService",
-) {}
+export class ThreadImportService extends Context.Service<
+  ThreadImportService,
+  ThreadImportServiceShape
+>()("t3/threadImport/ThreadImportService") {}
 
 export const makeThreadImportService = (input: {
   readonly projection: ProjectionSnapshotQuery["Service"];
@@ -211,7 +219,8 @@ export const makeThreadImportService = (input: {
         }
       }
       return scanned.toSorted(
-        (left, right) => Date.parse(right.candidate.updatedAt) - Date.parse(left.candidate.updatedAt),
+        (left, right) =>
+          Date.parse(right.candidate.updatedAt) - Date.parse(left.candidate.updatedAt),
       );
     });
 
@@ -310,7 +319,8 @@ export const makeThreadImportService = (input: {
             runtimeMode: request.runtimeMode,
             interactionMode: request.interactionMode,
             messages,
-            createdAt: yield* nowIso,
+            createdAt: transcript.createdAt,
+            updatedAt: transcript.updatedAt,
           }),
         );
         if (Result.isFailure(dispatchResult)) {
@@ -357,7 +367,9 @@ export const makeThreadImportService = (input: {
         const warnings = [...transcript.warnings];
         if (Result.isFailure(bindingResult)) {
           status = "transcript-only";
-          warnings.push("The transcript was imported, but native Codex resume state could not be saved.");
+          warnings.push(
+            "The transcript was imported, but native Codex resume state could not be saved.",
+          );
         }
 
         results.push({
