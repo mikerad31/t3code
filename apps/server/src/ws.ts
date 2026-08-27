@@ -732,6 +732,16 @@ const makeWsRpcLayer = (
           ),
         );
 
+      // Refetch a thread's shell and emit an upsert if it is still active, or a
+      // `thread-removed` if the projection has no active row for it. Emitting a
+      // removal on a `none` (rather than dropping the event) is what keeps
+      // coalescing correct: when a burst collapses a `thread.deleted`/`archived`
+      // into a later refetchable event for the same thread, the refetch returns
+      // `none` for the now-inactive row and this still tells the sidebar to drop
+      // it. A `thread-removed` the client does not have is a harmless no-op. The
+      // projection commits in the same transaction before the event publishes,
+      // so a `none` reliably means the thread is deleted or archived, not
+      // not-yet-persisted.
       const threadUpsertOrRemove = (
         threadId: ThreadId,
         sequence: number,
@@ -761,6 +771,18 @@ const makeWsRpcLayer = (
           ),
         );
 
+      // Turn a batch of domain events into shell stream items, coalescing by
+      // aggregate first. `toShellStreamEvent` re-reads the *current* projected
+      // shell for an aggregate, so within a batch only the latest event per
+      // aggregate matters: a burst of streaming `thread.message-sent` deltas for
+      // one thread collapses into a single shell refetch, and an unrelated
+      // `thread.created` in the same batch is never stuck behind those DB reads.
+      //
+      // Input events arrive in ascending sequence; we keep the last (highest
+      // sequence) event per aggregate, then re-sort ascending before emitting so
+      // the client — which applies shell items strictly by increasing sequence
+      // and drops any `sequence <= snapshotSequence` — never skips a coalesced
+      // item. The refetch runs with bounded concurrency (order-preserving).
       const SHELL_REFETCH_CONCURRENCY = 8;
       const coalesceShellEvents = (
         events: ReadonlyArray<OrchestrationEvent>,
@@ -782,6 +804,10 @@ const makeWsRpcLayer = (
           return shellEvents.flatMap((option) => (Option.isSome(option) ? [option.value] : []));
         });
 
+      // Small time/size window over which to coalesce shell events. The window
+      // bounds the worst-case added latency for a brand-new thread to appear in
+      // the sidebar (imperceptible), while collapsing high-frequency streaming
+      // traffic so it can't serialize the shell stream behind per-event DB reads.
       const SHELL_COALESCE_WINDOW = Duration.millis(50);
       const SHELL_COALESCE_MAX_CHUNK = 512;
       const coalesceShellStream = <E, R>(
@@ -797,6 +823,9 @@ const makeWsRpcLayer = (
         | { readonly kind: "event"; readonly event: OrchestrationEvent }
         | { readonly kind: "synchronized" };
 
+      // A completion marker is queued alongside raw live events so it cannot
+      // overtake an event still waiting in the coalescing window. Split each
+      // batch at markers and coalesce only the event segments on either side.
       const coalesceShellLiveInputs = (
         inputs: ReadonlyArray<ShellLiveInput>,
       ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamItem>, never, never> =>
@@ -988,6 +1017,9 @@ const makeWsRpcLayer = (
 
             if (bootstrap?.prepareWorktree) {
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
+              // "Start from origin" is a stored default; repos without an
+              // origin remote fall back to the local base branch instead of
+              // failing the whole bootstrap on `git fetch origin`.
               const startFromOrigin =
                 bootstrap.prepareWorktree.startFromOrigin === true &&
                 (yield* gitWorkflow.remoteExists({
@@ -1107,6 +1139,8 @@ const makeWsRpcLayer = (
           issues: keybindingsConfig.issues,
           providers,
           availableEditors,
+          // Same discovery-with-timeout treatment as editors: a slow probe
+          // must not stall server.getConfig, so it degrades to no targets.
           remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
             remoteOpenTargets.resolveTargets(),
           ),
@@ -1144,11 +1178,21 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              // Archive and settle both mean "done with this thread", so a
+              // live provider session must not keep running background work
+              // (PR monitors, dev servers, subagent fleets) after either
+              // lands. The decider rejects settling a starting/running
+              // session, so for settle this only ever stops an idle one; a
+              // stopped session-set does not count as activity, so the stop
+              // cannot un-settle the thread it follows.
               const parkingCommand =
                 normalizedCommand.type === "thread.archive" ||
                 normalizedCommand.type === "thread.settle"
                   ? normalizedCommand
                   : undefined;
+              // Best-effort on purpose: the user's archive/settle must not
+              // fail because this cleanup read blipped, so a failed read
+              // logs and skips the stop instead of propagating.
               const shouldStopSessionAfterCommand = parkingCommand
                 ? yield* projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
                     Effect.map(
@@ -1181,6 +1225,11 @@ const makeWsRpcLayer = (
                       ),
                       threadId: parkingCommand.threadId,
                       createdAt: yield* nowIso,
+                      // A settled thread can be re-engaged before this stop is
+                      // decided; the decider then drops the stop instead of
+                      // killing the new session. Archive stops stay
+                      // unconditional: turn starts on archived threads are
+                      // rejected, so there is no new session to protect.
                       ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
                     });
 
@@ -1195,6 +1244,10 @@ const makeWsRpcLayer = (
                   );
                 }
 
+                // Terminals are user-opened panes, not thread background
+                // work: archive removes the thread from view so they close
+                // with it, but a settled thread stays reachable and may be
+                // un-settled, so its terminals stay up.
                 if (parkingCommand.type === "thread.archive") {
                   yield* terminalManager.close({ threadId: parkingCommand.threadId }).pipe(
                     Effect.catch((error) =>
@@ -1271,6 +1324,17 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
+              // Coalesce the live shell stream per aggregate over a small window
+              // so bursts of high-frequency events (streaming message deltas,
+              // activity appends) collapse into a single shell refetch and never
+              // serialize a brand-new thread's `thread.created` behind hundreds
+              // of per-event DB reads. See coalesceShellStream.
+              // Attach live delivery into a scope-bound buffer BEFORE loading any
+              // snapshot or draining catch-up, otherwise an event published while
+              // the snapshot query is in flight is lost (it is past the snapshot's
+              // sequence but the live subscription is not attached yet). Every
+              // path below emits from this same buffered live tail. Overlapping
+              // events are deduped by sequence on the client.
               const liveBuffer = yield* Queue.unbounded<ShellLiveInput>();
               yield* Effect.forkScoped(
                 orchestrationEngine.streamDomainEvents.pipe(
@@ -1295,6 +1359,9 @@ const makeWsRpcLayer = (
                 ),
               );
 
+              // Offer the completion marker into the same queue as live events.
+              // Anything buffered while snapshot/replay work was in flight is
+              // therefore delivered before the client is told it is synchronized.
               const synchronizedThenLive =
                 input.requestCompletionMarker === true
                   ? Stream.concat(
@@ -1308,10 +1375,22 @@ const makeWsRpcLayer = (
                     )
                   : bufferedLiveStream;
 
+              // When the client already holds a shell snapshot (cached, or loaded
+              // over HTTP) it passes that snapshot's sequence, and we resume by
+              // replaying shell events after it instead of re-sending the whole
+              // projects/threads list over the socket. If the client is too far
+              // behind, we fall back to a fresh snapshot instead of an unbounded
+              // replay (see below).
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 const headSequence = yield* orchestrationEngine.latestSequence;
                 const replayGap = headSequence - afterSequence;
+                // Gap too large: replaying every intervening event (each a shell
+                // refetch) is far more expensive than a single O(active-threads)
+                // snapshot. A cursor ahead of this engine's authoritative state
+                // is also invalid, so reset it with a snapshot. Send the snapshot
+                // followed by the buffered live tail, exactly as the
+                // no-afterSequence path does.
                 if (replayGap < 0 || replayGap > SHELL_RESUME_MAX_GAP) {
                   const snapshot = yield* loadSnapshot;
                   return Stream.concat(
@@ -1320,6 +1399,10 @@ const makeWsRpcLayer = (
                   );
                 }
                 const catchUpStream = coalesceShellStream(
+                  // Replay only through the head captured above. Newer events
+                  // are already covered by the live subscription, so this bound
+                  // cannot chase a moving event-store head or grow the live
+                  // buffer indefinitely while waiting for an empty page.
                   orchestrationEngine.readEvents(afterSequence, replayGap),
                 ).pipe(
                   Stream.mapError(
@@ -1378,12 +1461,36 @@ const makeWsRpcLayer = (
                 })),
               );
 
+              // Attach live delivery before reading either replay or snapshot state.
+              // Otherwise an event published while the snapshot is loading is lost.
               const liveBuffer = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
               yield* Effect.forkScoped(
                 liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
               );
               const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
+              // When the client already loaded the snapshot over HTTP it passes
+              // that snapshot's sequence, and we resume the live subscription by
+              // replaying persisted events after it instead of re-sending the
+              // (potentially multi-KB) snapshot frame over the socket.
+              //
+              // The live PubSub subscription must be attached *before* draining
+              // the catch-up replay, otherwise events published during the replay
+              // window are dropped (they are past the persisted tail the replay
+              // read, but the live stream is not yet subscribed). So fork the
+              // live stream into a buffer bound to this stream's scope, then emit
+              // catch-up followed by the buffered/ongoing live events. Overlapping
+              // events are deduped by sequence on the client.
+              //
+              // The replay is bounded to the projection head captured below. The
+              // catch-up range is normally tiny (a fresh HTTP snapshot sequence),
+              // but a stale cached cursor can sit hundreds of thousands of global
+              // events behind — replaying that decodes every intervening event
+              // (including every other thread's tool payloads) only to discard
+              // almost all of them, which has OOM-killed servers on large
+              // databases. A truncated replay would silently drop this thread's
+              // events, so past the gap cap we reset the client with a fresh
+              // thread snapshot instead, exactly like subscribeShell above.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 const headSequence = yield* orchestrationEngine.latestSequence;
@@ -1416,11 +1523,18 @@ const makeWsRpcLayer = (
                       : bufferedLiveStream;
                   return Stream.concat(catchUpStream, afterCatchUp);
                 }
+                // Gap too large (or cursor ahead of authoritative state): fall
+                // through to the snapshot path so the client converges from a
+                // fresh thread detail instead of an unbounded replay.
               }
 
               const snapshot = yield* projectionSnapshotQuery
                 .getThreadDetailSnapshot(
                   input.threadId,
+                  // Windowing the fallback snapshot is opt-in per subscription:
+                  // clients that don't send turnLimit (including all
+                  // pre-pagination clients) get the full thread, since they
+                  // have no way to load older pages.
                   input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
                 )
                 .pipe(
@@ -1650,7 +1764,7 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.serverGetBackgroundPolicy]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetBackgroundPolicy, backgroundPolicy.snapshot, {
-            "rpc.aggregate": "server" },
+            "rpc.aggregate": "server",
           }),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
@@ -1687,25 +1801,27 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.pullRequestsList]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsList, pullRequests.list(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsListStats]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsDetail, pullRequests.detail(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsActivity]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsThreadComments]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsThreadComments,
             pullRequests.threadComments(input),
-            { "rpc.aggregate": "pull-requests" },
+            {
+              "rpc.aggregate": "pull-requests",
+            },
           ),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
@@ -1715,26 +1831,28 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.pullRequestsRunAction]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsRunAction, pullRequests.runAction(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsUpdate]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsUpdate, pullRequests.update(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsComment]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsComment, pullRequests.comment(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsUpdateComment]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsUpdateComment,
             pullRequests.updateComment(input),
-            { "rpc.aggregate": "pull-requests" },
+            {
+              "rpc.aggregate": "pull-requests",
+            },
           ),
         [WS_METHODS.pullRequestsSubmitReview]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsSubmitReview, pullRequests.submitReview(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsReplyToThread]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReplyToThread,
@@ -1749,12 +1867,12 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.pullRequestsSetReaction]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsSetReaction, pullRequests.setReaction(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
-            "rpc.aggregate": "pull-requests" },
-          ),
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsReviewerCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsReviewerCandidates,
@@ -1771,13 +1889,17 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
             sourceControlRepositories.lookupRepository(input),
-            { "rpc.aggregate": "source-control" },
+            {
+              "rpc.aggregate": "source-control",
+            },
           ),
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlCloneRepository,
             sourceControlRepositories.cloneRepository(input),
-            { "rpc.aggregate": "source-control" },
+            {
+              "rpc.aggregate": "source-control",
+            },
           ),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           observeRpcEffect(
@@ -1785,7 +1907,9 @@ const makeWsRpcLayer = (
             sourceControlRepositories
               .publishRepository(input)
               .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
-            { "rpc.aggregate": "source-control" },
+            {
+              "rpc.aggregate": "source-control",
+            },
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
@@ -1869,8 +1993,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
-            "rpc.aggregate": "workspace" },
-          ),
+            "rpc.aggregate": "workspace",
+          }),
         [WS_METHODS.filesystemBrowse]: (input) =>
           observeRpcEffect(
             WS_METHODS.filesystemBrowse,
@@ -1888,8 +2012,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.attachmentsCreateUploadUrl]: (input) =>
           observeRpcEffect(WS_METHODS.attachmentsCreateUploadUrl, issueAttachmentUploadUrl(input), {
-            "rpc.aggregate": "workspace" },
-          ),
+            "rpc.aggregate": "workspace",
+          }),
         [WS_METHODS.attachmentsDelete]: (input) =>
           observeRpcEffect(
             WS_METHODS.attachmentsDelete,
@@ -1972,13 +2096,17 @@ const makeWsRpcLayer = (
             vcsStatusBroadcaster.streamStatus(input, {
               automaticRemoteRefreshInterval: automaticGitFetchInterval,
             }),
-            { "rpc.aggregate": "vcs" },
+            {
+              "rpc.aggregate": "vcs",
+            },
           ),
         [WS_METHODS.vcsRefreshStatus]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRefreshStatus,
             vcsStatusBroadcaster.refreshStatus(input.cwd),
-            { "rpc.aggregate": "vcs" },
+            {
+              "rpc.aggregate": "vcs",
+            },
           ),
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(
@@ -2019,7 +2147,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.gitResolvePullRequest,
             gitWorkflow.resolvePullRequest(input),
-            { "rpc.aggregate": "git" },
+            {
+              "rpc.aggregate": "git",
+            },
           ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           observeRpcEffect(
@@ -2031,8 +2161,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
-            "rpc.aggregate": "vcs" },
-          ),
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateWorktree,
@@ -2067,8 +2197,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.reviewGetDiffPreview]: (input) =>
           observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
-            "rpc.aggregate": "review" },
-          ),
+            "rpc.aggregate": "review",
+          }),
         [WS_METHODS.reviewGetDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.reviewGetDiffFileContents,
@@ -2077,8 +2207,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalAttach]: (input) =>
           observeRpcStream(
             WS_METHODS.terminalAttach,
@@ -2092,24 +2222,24 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.terminalWrite]: (input) =>
           observeRpcEffect(WS_METHODS.terminalWrite, terminalManager.write(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalResize]: (input) =>
           observeRpcEffect(WS_METHODS.terminalResize, terminalManager.resize(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalClear]: (input) =>
           observeRpcEffect(WS_METHODS.terminalClear, terminalManager.clear(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalRestart]: (input) =>
           observeRpcEffect(WS_METHODS.terminalRestart, terminalManager.restart(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.terminalClose]: (input) =>
           observeRpcEffect(WS_METHODS.terminalClose, terminalManager.close(input), {
-            "rpc.aggregate": "terminal" },
-          ),
+            "rpc.aggregate": "terminal",
+          }),
         [WS_METHODS.subscribeTerminalEvents]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeTerminalEvents,
@@ -2134,32 +2264,32 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.previewOpen]: (input) =>
           observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewNavigate]: (input) =>
           observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewResize]: (input) =>
           observeRpcEffect(WS_METHODS.previewResize, previewManager.resize(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewRefresh]: (input) =>
           observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewClose]: (input) =>
           observeRpcEffect(WS_METHODS.previewClose, previewManager.close(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewList]: (input) =>
           observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewReportStatus]: (input) =>
           observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewAutomationConnect]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.previewAutomationConnect,
@@ -2180,8 +2310,8 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
-            "rpc.aggregate": "preview" },
-          ),
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeDiscoveredLocalServers,
@@ -2369,6 +2499,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              // One server-lifetime service means clients share the same PR caches, and a WS
+              // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
