@@ -6,6 +6,7 @@ on:
       - feat/codex-thread-import
     paths:
       - .github/workflows/t3-import-resume-repair-v2.yml
+      - .github/t3-import-resume-repair-v2.trigger
 
 permissions:
   contents: write
