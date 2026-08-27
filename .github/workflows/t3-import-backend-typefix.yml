@@ -1,0 +1,46 @@
+name: T3 importer backend type fix
+
+on:
+  push:
+    branches: [feat/codex-thread-import]
+    paths: [.github/workflows/t3-import-backend-typefix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fix provider model selection exact optional typing
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("apps/server/src/threadImport/ThreadImportService.ts")
+          text = path.read_text(encoding="utf-8")
+          old = '    readonly models: ReadonlyArray<{ readonly slug: string; readonly isDefault?: boolean }>;'
+          new = '    readonly models: ReadonlyArray<{ readonly slug: string; readonly isDefault?: boolean | undefined }>;'
+          if text.count(old) != 1:
+              raise RuntimeError(f"model selection anchor mismatch: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Provider reactor tests
+        run: vp test run apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+      - name: Full repository typecheck
+        run: vpr typecheck
+      - name: Commit backend type fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/server/src/threadImport/ThreadImportService.ts
+          git commit -m "fix(import): satisfy provider snapshot model typing"
+          git push origin HEAD:feat/codex-thread-import
