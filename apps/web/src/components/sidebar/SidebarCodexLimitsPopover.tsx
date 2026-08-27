@@ -1,7 +1,9 @@
-import { GaugeIcon, LoaderIcon, RefreshCwIcon } from "lucide-react";
+import { GaugeIcon, LoaderIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useEnvironments } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -10,6 +12,7 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
+  parseCodexBankedResetCount,
   parseCodexLimitMessage,
   resolveCodexAccountLabel,
   type ParsedCodexLimitWindow,
@@ -21,11 +24,38 @@ interface CodexLimitEntry {
   readonly accountLabel: string;
   readonly provider: ServerProvider;
   readonly windows: ReadonlyArray<ParsedCodexLimitWindow>;
+  readonly bankedResetCount: number | null;
+}
+
+interface ResetAttemptState {
+  readonly idempotencyKey: string;
+  readonly pending: boolean;
+  readonly failed: boolean;
+  readonly message: string | null;
 }
 
 function formatPercent(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function resetAttemptKey(entry: CodexLimitEntry): string {
+  return `${entry.environmentId}:${entry.provider.instanceId}`;
+}
+
+function resetOutcomeMessage(outcome: string): string {
+  switch (outcome) {
+    case "reset":
+      return "Banked reset applied. Limits are refreshing.";
+    case "nothingToReset":
+      return "No active limit needed resetting, so no banked reset was used.";
+    case "noCredit":
+      return "Codex reports that no banked reset is available.";
+    case "alreadyRedeemed":
+      return "This redemption attempt was already applied. Limits are refreshing.";
+    default:
+      return "Codex returned an unknown reset result. Refresh limits before trying again.";
+  }
 }
 
 function CodexLimitWindowRow({ window }: { readonly window: ParsedCodexLimitWindow }) {
@@ -60,15 +90,20 @@ function CodexLimitWindowRow({ window }: { readonly window: ParsedCodexLimitWind
 function CodexLimitProviderCard({
   entry,
   showEnvironment,
+  resetAttempt,
+  onUseReset,
 }: {
   readonly entry: CodexLimitEntry;
   readonly showEnvironment: boolean;
+  readonly resetAttempt: ResetAttemptState | undefined;
+  readonly onUseReset: (entry: CodexLimitEntry) => void;
 }) {
   const { provider, windows } = entry;
   const displayName = entry.accountLabel;
   const instanceDetail =
     String(provider.instanceId) !== String(provider.driver) ? String(provider.instanceId) : null;
   const planLabel = provider.auth.label ?? provider.auth.type ?? null;
+  const canUseReset = (entry.bankedResetCount ?? 0) > 0;
 
   return (
     <section className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
@@ -108,6 +143,40 @@ function CodexLimitProviderCard({
           Subscription limits are unavailable for this account right now.
         </div>
       )}
+
+      {entry.bankedResetCount !== null ? (
+        <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-2.5">
+          <div className="text-[11px] text-muted-foreground">
+            Banked resets: <span className="font-mono text-foreground/85">{entry.bankedResetCount}</span>
+          </div>
+          {canUseReset ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={resetAttempt?.pending === true}
+              onClick={() => onUseReset(entry)}
+            >
+              {resetAttempt?.pending ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <RotateCcwIcon className="size-3.5" />
+              )}
+              {resetAttempt?.failed ? "Retry reset" : "Use reset"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {resetAttempt?.message ? (
+        <div
+          className={`rounded-md px-2.5 py-2 text-[11px] ${
+            resetAttempt.failed ? "bg-destructive/10 text-destructive" : "bg-muted/40 text-muted-foreground"
+          }`}
+        >
+          {resetAttempt.message}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -117,7 +186,12 @@ export function SidebarCodexLimitsPopover() {
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  const consumeRateLimitResetCredit = useAtomCommand(
+    serverEnvironment.consumeRateLimitResetCredit,
+    { reportFailure: false },
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>({});
 
   const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {
     const discovered = environments.flatMap((environment) =>
@@ -129,6 +203,7 @@ export function SidebarCodexLimitsPopover() {
                 environmentLabel: environment.label,
                 provider,
                 windows: parseCodexLimitMessage(provider.message),
+                bankedResetCount: parseCodexBankedResetCount(provider.message),
               },
             ]
           : [],
@@ -158,6 +233,69 @@ export function SidebarCodexLimitsPopover() {
       environmentIds.map((environmentId) => refreshProviders({ environmentId, input: {} })),
     ).finally(() => setIsRefreshing(false));
   }, [environmentIds, isRefreshing, refreshProviders]);
+
+  const useReset = useCallback(
+    (entry: CodexLimitEntry) => {
+      const targetKey = resetAttemptKey(entry);
+      const previousAttempt = resetAttempts[targetKey];
+      if (previousAttempt?.pending) return;
+
+      const confirmed = window.confirm(
+        `Use one banked Codex reset for ${entry.accountLabel}?\n\n` +
+          "This asks Codex to redeem one earned reset for this exact account. " +
+          "If no active limit needs resetting, Codex reports that without using a credit.",
+      );
+      if (!confirmed) return;
+
+      // A failed transport/RPC attempt keeps its UUID so a retry cannot redeem
+      // a second credit if the first response was merely lost after redemption.
+      const idempotencyKey =
+        previousAttempt?.failed === true ? previousAttempt.idempotencyKey : crypto.randomUUID();
+      setResetAttempts((current) => ({
+        ...current,
+        [targetKey]: {
+          idempotencyKey,
+          pending: true,
+          failed: false,
+          message: null,
+        },
+      }));
+
+      void consumeRateLimitResetCredit({
+        environmentId: entry.environmentId,
+        input: {
+          instanceId: entry.provider.instanceId,
+          idempotencyKey,
+        },
+      }).then((settled) => {
+        const result = Option.getOrNull(AsyncResult.value(settled));
+        if (result === null) {
+          setResetAttempts((current) => ({
+            ...current,
+            [targetKey]: {
+              idempotencyKey,
+              pending: false,
+              failed: true,
+              message:
+                "Reset request failed. Retry will reuse the same redemption attempt for safety.",
+            },
+          }));
+          return;
+        }
+
+        setResetAttempts((current) => ({
+          ...current,
+          [targetKey]: {
+            idempotencyKey,
+            pending: false,
+            failed: false,
+            message: resetOutcomeMessage(result.outcome),
+          },
+        }));
+      });
+    },
+    [consumeRateLimitResetCredit, resetAttempts],
+  );
 
   if (entries.length === 0) return null;
 
@@ -213,6 +351,8 @@ export function SidebarCodexLimitsPopover() {
                   key={`${entry.environmentId}:${entry.provider.instanceId}`}
                   entry={entry}
                   showEnvironment={showEnvironment}
+                  resetAttempt={resetAttempts[resetAttemptKey(entry)]}
+                  onUseReset={useReset}
                 />
               ))}
             </div>
