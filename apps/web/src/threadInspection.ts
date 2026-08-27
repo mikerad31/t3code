@@ -10,6 +10,7 @@ import { readEnvironmentThread } from "./state/threads";
 
 const HISTORY_POLL_INTERVAL_MS = 75;
 const HISTORY_MAX_POLL_STEPS = 800;
+const DOWNLOAD_OBJECT_URL_REVOKE_DELAY_MS = 30_000;
 
 function waitForHistoryProgress(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, HISTORY_POLL_INTERVAL_MS));
@@ -63,5 +64,7 @@ export function downloadTextFile(input: {
   document.body.append(anchor);
   anchor.click();
   anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Keep the object URL alive long enough for browsers/WebViews that consume
+  // the click asynchronously; immediate revocation can abort the download.
+  setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_OBJECT_URL_REVOKE_DELAY_MS);
 }
