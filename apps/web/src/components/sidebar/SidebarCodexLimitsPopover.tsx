@@ -11,12 +11,14 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
   parseCodexLimitMessage,
+  resolveCodexAccountLabel,
   type ParsedCodexLimitWindow,
 } from "./SidebarCodexLimitsPopover.logic";
 
 interface CodexLimitEntry {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
+  readonly accountLabel: string;
   readonly provider: ServerProvider;
   readonly windows: ReadonlyArray<ParsedCodexLimitWindow>;
 }
@@ -63,7 +65,7 @@ function CodexLimitProviderCard({
   readonly showEnvironment: boolean;
 }) {
   const { provider, windows } = entry;
-  const displayName = provider.displayName?.trim() || String(provider.instanceId);
+  const displayName = entry.accountLabel;
   const instanceDetail =
     String(provider.instanceId) !== String(provider.driver) ? String(provider.instanceId) : null;
   const planLabel = provider.auth.label ?? provider.auth.type ?? null;
@@ -117,24 +119,31 @@ export function SidebarCodexLimitsPopover() {
   });
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(
-    () =>
-      environments.flatMap((environment) =>
-        (environment.serverConfig?.providers ?? []).flatMap((provider) =>
-          String(provider.driver) === "codex"
-            ? [
-                {
-                  environmentId: environment.environmentId,
-                  environmentLabel: environment.label,
-                  provider,
-                  windows: parseCodexLimitMessage(provider.message),
-                },
-              ]
-            : [],
-        ),
+  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {
+    const discovered = environments.flatMap((environment) =>
+      (environment.serverConfig?.providers ?? []).flatMap((provider) =>
+        String(provider.driver) === "codex"
+          ? [
+              {
+                environmentId: environment.environmentId,
+                environmentLabel: environment.label,
+                provider,
+                windows: parseCodexLimitMessage(provider.message),
+              },
+            ]
+          : [],
       ),
-    [environments],
-  );
+    );
+
+    return discovered.map((entry, ordinal) => ({
+      ...entry,
+      accountLabel: resolveCodexAccountLabel({
+        displayName: entry.provider.displayName,
+        ordinal,
+        accountCount: discovered.length,
+      }),
+    }));
+  }, [environments]);
 
   const environmentIds = useMemo(
     () => [...new Set(entries.map((entry) => entry.environmentId))],
@@ -146,9 +155,7 @@ export function SidebarCodexLimitsPopover() {
     if (isRefreshing || environmentIds.length === 0) return;
     setIsRefreshing(true);
     void Promise.all(
-      environmentIds.map((environmentId) =>
-        refreshProviders({ environmentId, input: {} }),
-      ),
+      environmentIds.map((environmentId) => refreshProviders({ environmentId, input: {} })),
     ).finally(() => setIsRefreshing(false));
   }, [environmentIds, isRefreshing, refreshProviders]);
 
