@@ -111,7 +111,7 @@ function makeHarness(options: {
       Effect.succeed({
         threads: importedThread === null ? [] : [importedThread],
       } as unknown as OrchestrationReadModel),
-    getThreadShellById: (threadId) =>
+    getThreadShellById: (threadId: OrchestrationThreadShell["id"]) =>
       Effect.succeed(
         importedThread !== null && String(importedThread.id) === String(threadId)
           ? Option.some(importedThread)
