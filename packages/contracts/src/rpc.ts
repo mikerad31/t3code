@@ -75,6 +75,9 @@ import {
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
 import {
+  ProviderConsumeRateLimitResetCreditError,
+  ProviderConsumeRateLimitResetCreditInput,
+  ProviderConsumeRateLimitResetCreditResult,
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -228,6 +231,7 @@ export const WS_METHODS = {
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
+  providerConsumeRateLimitResetCredit: "provider.consumeRateLimitResetCredit",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -505,11 +509,14 @@ export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
  * 40-60% of the listing read that answers everything else on the row, so the rows arrive first
  * and their stats a moment later.
  */
-export const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
-  payload: PullRequestListStatsInput,
-  success: PullRequestListStatsResult,
-  error: PullRequestRpcError,
-});
+export const WsPullRequestsListStatsRpc = Rpc.make(
+  WS_METHODS.pullRequestsListStats,
+  {
+    payload: PullRequestListStatsInput,
+    success: PullRequestListStatsResult,
+    error: PullRequestRpcError,
+  },
+);
 
 export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
   payload: PullRequestRef,
@@ -699,6 +706,18 @@ export const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFee
   success: ProviderUploadFeedbackResult,
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
 });
+
+export const WsProviderConsumeRateLimitResetCreditRpc = Rpc.make(
+  WS_METHODS.providerConsumeRateLimitResetCredit,
+  {
+    payload: ProviderConsumeRateLimitResetCreditInput,
+    success: ProviderConsumeRateLimitResetCreditResult,
+    error: Schema.Union([
+      ProviderConsumeRateLimitResetCreditError,
+      EnvironmentAuthorizationError,
+    ]),
+  },
+);
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
@@ -1072,6 +1091,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
   WsProviderUploadFeedbackRpc,
+  WsProviderConsumeRateLimitResetCreditRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
