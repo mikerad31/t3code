@@ -1,0 +1,76 @@
+name: T3 importer finalization
+
+on:
+  push:
+    branches:
+      - feat/codex-thread-import
+    paths:
+      - .github/workflows/t3-import-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Restore unrelated upstream files and remove temporary scaffolding
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout origin/main -- \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.ts \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          git rm -f --ignore-unmatch \
+            .github/scripts/t3_import_transport.py \
+            .github/scripts/t3_import_ui.py \
+            .github/workflows/t3-import-backend-runner.yml \
+            .github/workflows/t3-import-backend-typefix.yml \
+            .github/workflows/t3-import-backend-v2.yml \
+            .github/workflows/t3-import-tests.yml \
+            .github/workflows/t3-import-transport.yml \
+            .github/workflows/t3-import-ui.yml \
+            .github/workflows/t3-import-finalize.yml \
+            .t3-import-backend-v2-typecheck.txt
+      - name: Verify importer-only diff
+        run: |
+          set -euo pipefail
+          actual="$(git diff --name-only origin/main | sort)"
+          expected="$(cat <<'EOF' | sort
+          apps/server/src/auth/RpcAuthorization.ts
+          apps/server/src/orchestration/decider.ts
+          apps/server/src/provider/Drivers/CodexDriver.ts
+          apps/server/src/provider/Layers/CodexThreadImport.ts
+          apps/server/src/provider/ProviderDriver.ts
+          apps/server/src/provider/ProviderThreadImport.ts
+          apps/server/src/server.test.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          apps/server/src/ws.ts
+          apps/web/src/components/Sidebar.tsx
+          apps/web/src/components/ThreadImportDialog.tsx
+          packages/client-runtime/src/state/server.ts
+          packages/contracts/src/index.ts
+          packages/contracts/src/orchestration.ts
+          packages/contracts/src/rpc.ts
+          packages/contracts/src/threadImports.ts
+          EOF
+          )"
+          printf '%s\n' "$actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "Unexpected final importer diff" >&2
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          git diff --check origin/main
+      - name: Commit clean importer branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(import): remove validation scaffolding"
+          git push origin HEAD:feat/codex-thread-import
