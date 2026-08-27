@@ -41,6 +41,7 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   ClockIcon,
+  DownloadIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -166,6 +167,7 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ThreadImportDialog } from "./ThreadImportDialog";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
@@ -1804,6 +1806,9 @@ export default function Sidebar() {
     },
   });
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const [threadImportProject, setThreadImportProject] = useState<SidebarProjectSnapshot | null>(
+    null,
+  );
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
@@ -2010,6 +2015,16 @@ export default function Sidebar() {
       });
     },
     [isMobile, router, setOpenMobile],
+  );
+
+  const handleImportConversations = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setProjectScopeMenuOpen(false);
+      setThreadImportProject(projectGroup);
+    },
+    [],
   );
 
   // Settled threads stay in the live shell stream (settled ≠ archived), so
@@ -3390,6 +3405,22 @@ export default function Sidebar() {
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
+      <ThreadImportDialog
+        open={threadImportProject !== null}
+        onOpenChange={(open) => {
+          if (!open) setThreadImportProject(null);
+        }}
+        projectTitle={threadImportProject?.displayName ?? "project"}
+        targets={
+          threadImportProject?.memberProjectRefs.map((projectRef) => ({
+            environmentId: projectRef.environmentId,
+            projectId: projectRef.projectId,
+            environmentLabel:
+              environmentLabelById.get(projectRef.environmentId) ??
+              String(projectRef.environmentId),
+          })) ?? []
+        }
+      />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         className="gap-0"
@@ -3545,6 +3576,19 @@ export default function Sidebar() {
                               className="size-4 shrink-0"
                             />
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost-muted"
+                              aria-label={`Import conversations into ${project.displayName}`}
+                              title={`Import conversations into ${project.displayName}`}
+                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                handleImportConversations(event, project);
+                              }}
+                            >
+                              <DownloadIcon className="size-3.5" />
+                            </Button>
                             <Button
                               size="icon-xs"
                               variant="ghost-muted"
