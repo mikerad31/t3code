@@ -1,4 +1,8 @@
-import type { OrchestrationMessage, OrchestrationThread } from "@t3tools/contracts";
+import type {
+  OrchestrationMessage,
+  OrchestrationThread,
+  OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 
 export interface ThreadExportDocument {
   readonly schemaVersion: 1;
@@ -17,8 +21,26 @@ function formatAttachments(message: OrchestrationMessage): string {
   return `\n\nAttachments:\n${attachments.map((attachment) => `- ${attachment.name}`).join("\n")}`;
 }
 
+function formatActivity(activity: OrchestrationThreadActivity): string[] {
+  const payload = JSON.stringify(activity.payload, null, 2) ?? String(activity.payload);
+  return [
+    "",
+    `### ${activity.kind} — ${activity.createdAt}`,
+    "",
+    `- Tone: ${activity.tone}`,
+    activity.turnId ? `- Turn: \`${activity.turnId}\`` : null,
+    activity.sequence === undefined ? null : `- Sequence: ${activity.sequence}`,
+    "",
+    activity.summary,
+    "",
+    "````json",
+    payload,
+    "````",
+  ].filter((line): line is string => line !== null);
+}
+
 export function formatThreadMarkdown(thread: OrchestrationThread): string {
-  const metadata = [
+  const lines: string[] = [
     `# ${thread.title}`,
     "",
     `- Thread ID: \`${thread.id}\``,
@@ -31,12 +53,77 @@ export function formatThreadMarkdown(thread: OrchestrationThread): string {
     "## Conversation",
   ].filter((line): line is string => line !== null);
 
-  const messages = thread.messages.flatMap((message) => {
+  for (const message of thread.messages) {
     const text = message.text.trim().length > 0 ? message.text : "_(empty message)_";
-    return ["", formatMessageHeading(message), "", `${text}${formatAttachments(message)}`];
-  });
+    lines.push("", formatMessageHeading(message), "", `${text}${formatAttachments(message)}`);
+  }
 
-  return [...metadata, ...messages, ""].join("\n");
+  if (thread.activities.length > 0) {
+    lines.push("", "## Activity log");
+    for (const activity of thread.activities) lines.push(...formatActivity(activity));
+  }
+
+  if (thread.proposedPlans.length > 0) {
+    lines.push("", "## Proposed plans");
+    for (const plan of thread.proposedPlans) {
+      lines.push(
+        "",
+        `### Plan — ${plan.createdAt}`,
+        "",
+        plan.turnId ? `- Turn: \`${plan.turnId}\`` : "- Turn: none",
+        plan.implementedAt ? `- Implemented: ${plan.implementedAt}` : "- Implemented: no",
+        plan.implementationThreadId
+          ? `- Implementation thread: \`${plan.implementationThreadId}\``
+          : "- Implementation thread: none",
+        "",
+        plan.planMarkdown,
+      );
+    }
+  }
+
+  if (thread.checkpoints.length > 0) {
+    lines.push("", "## Checkpoints");
+    for (const checkpoint of thread.checkpoints) {
+      lines.push(
+        "",
+        `### Turn ${checkpoint.turnId} — ${checkpoint.completedAt}`,
+        "",
+        `- Status: ${checkpoint.status}`,
+        `- Checkpoint ref: \`${checkpoint.checkpointRef}\``,
+        `- Checkpoint turn count: ${checkpoint.checkpointTurnCount}`,
+        checkpoint.assistantMessageId
+          ? `- Assistant message: \`${checkpoint.assistantMessageId}\``
+          : "- Assistant message: none",
+      );
+      if (checkpoint.files.length > 0) {
+        lines.push(
+          "",
+          "Files:",
+          ...checkpoint.files.map(
+            (file) => `- \`${file.path}\` (${file.kind}, +${file.additions} / -${file.deletions})`,
+          ),
+        );
+      }
+    }
+  }
+
+  if (thread.session !== null) {
+    lines.push(
+      "",
+      "## Session",
+      "",
+      `- Status: ${thread.session.status}`,
+      `- Provider: ${thread.session.providerName ?? "none"}`,
+      `- Provider instance: ${thread.session.providerInstanceId ?? "none"}`,
+      `- Runtime mode: ${thread.session.runtimeMode}`,
+      `- Active turn: ${thread.session.activeTurnId ?? "none"}`,
+      `- Updated: ${thread.session.updatedAt}`,
+      thread.session.lastError ? `- Last error: ${thread.session.lastError}` : null,
+    );
+  }
+
+  lines.push("");
+  return lines.filter((line): line is string => line !== null).join("\n");
 }
 
 export function buildThreadExportDocument(thread: OrchestrationThread): ThreadExportDocument {
