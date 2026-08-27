@@ -57,3 +57,19 @@ export function parseCodexLimitMessage(
 
   return windows;
 }
+
+/**
+ * `availableCount` from Codex is authoritative. The server emits it as a
+ * dedicated status segment so this feature can remain additive to the quota-v1
+ * wire shape while the destructive consume operation uses its own typed RPC.
+ */
+export function parseCodexBankedResetCount(message: string | null | undefined): number | null {
+  if (!message?.startsWith("Limits — ")) return null;
+  for (const segment of message.slice("Limits — ".length).split(" · ")) {
+    const match = segment.match(/^Banked resets:\s*(\d+)$/);
+    if (!match) continue;
+    const value = Number(match[1]);
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  return null;
+}
