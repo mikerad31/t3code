@@ -1,0 +1,70 @@
+name: Validate importer smoke fixes
+
+on:
+  push:
+    branches:
+      - feat/codex-thread-import
+    paths:
+      - .github/workflows/tmp-import-smoke-validate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply guarded smoke fixes
+        run: |
+          set -euo pipefail
+          python scripts/tmp-import-smoke-fixes.py
+          python scripts/tmp-import-provider-lock-fix.py
+
+      - name: Repository conformance
+        run: vp check
+
+      - name: Typecheck
+        run: vpr typecheck
+
+      - name: Server tests
+        run: vp run --filter t3 test
+
+      - name: Web tests
+        run: vp run --filter @t3tools/web test
+
+      - name: Diff sanity
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+
+      - name: Stage validated files
+        run: |
+          mkdir -p /tmp/import-fix/apps/server/src/threadImport
+          mkdir -p /tmp/import-fix/apps/server/src/orchestration
+          mkdir -p /tmp/import-fix/apps/web/src/components
+          cp apps/server/src/threadImport/ThreadImportService.ts /tmp/import-fix/apps/server/src/threadImport/
+          cp apps/server/src/threadImport/ThreadImportService.test.ts /tmp/import-fix/apps/server/src/threadImport/
+          cp apps/server/src/orchestration/decider.ts /tmp/import-fix/apps/server/src/orchestration/
+          cp apps/server/src/orchestration/decider.threadImport.test.ts /tmp/import-fix/apps/server/src/orchestration/
+          cp apps/web/src/components/ChatView.logic.ts /tmp/import-fix/apps/web/src/components/
+          cp apps/web/src/components/ChatView.logic.test.ts /tmp/import-fix/apps/web/src/components/
+          cp apps/web/src/components/ChatView.tsx /tmp/import-fix/apps/web/src/components/
+
+      - name: Upload validated files
+        uses: actions/upload-artifact@v7
+        with:
+          name: importer-smoke-fix-files
+          path: /tmp/import-fix
+          retention-days: 1
