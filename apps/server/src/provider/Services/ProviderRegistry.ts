@@ -7,9 +7,6 @@
  * @module ProviderRegistry
  */
 import type {
-  ProviderConsumeRateLimitResetCreditError,
-  ProviderConsumeRateLimitResetCreditInput,
-  ProviderConsumeRateLimitResetCreditResult,
   ProviderInstanceId,
   ProviderDriverKind,
   ServerProvider,
@@ -50,19 +47,6 @@ export interface ProviderRegistryShape {
   readonly refreshInstance: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
-
-  /**
-   * Redeem one banked rate-limit reset against exactly one configured
-   * provider instance. Drivers that do not expose this account action return
-   * a typed unsupported error. A terminal consume outcome is followed by an
-   * exact-instance snapshot refresh so callers observe authoritative limits.
-   */
-  readonly consumeRateLimitResetCredit: (
-    input: ProviderConsumeRateLimitResetCreditInput,
-  ) => Effect.Effect<
-    ProviderConsumeRateLimitResetCreditResult,
-    ProviderConsumeRateLimitResetCreditError
-  >;
 
   /**
    * Resolve the maintenance capabilities owned by one live provider instance.
