@@ -15,7 +15,7 @@ const A2 = ProviderInstanceId.make("A2");
 const A3 = ProviderInstanceId.make("A3");
 
 function instanceRegistryFor(
-  instances: ReadonlyMap<typeof ProviderInstanceId.Type, ProviderInstance>,
+  instances: ReadonlyMap<ProviderInstanceId, ProviderInstance>,
 ): ProviderInstanceRegistryShape {
   return {
     getInstance: (instanceId) => Effect.succeed(instances.get(instanceId)),
@@ -29,7 +29,7 @@ function providerRegistryWith(
 }
 
 function resetInstance(input: {
-  readonly instanceId: typeof ProviderInstanceId.Type;
+  readonly instanceId: ProviderInstanceId;
   readonly onConsume: (idempotencyKey: string) => void;
 }): ProviderInstance {
   return {
@@ -41,7 +41,7 @@ function resetInstance(input: {
           return "reset" as const;
         }),
     },
-  } as ProviderInstance;
+  } as unknown as ProviderInstance;
 }
 
 it.effect(
@@ -148,7 +148,7 @@ it.effect("rejects an unknown provider instance before attempting a refresh", ()
 });
 
 it.effect("rejects an instance that does not expose a reset action", () => {
-  const unsupportedInstance = { instanceId: A2 } as ProviderInstance;
+  const unsupportedInstance = { instanceId: A2 } as unknown as ProviderInstance;
   const instances = new Map([[A2, unsupportedInstance]]);
 
   return Effect.gen(function* () {
