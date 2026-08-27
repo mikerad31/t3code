@@ -3,6 +3,7 @@
 import * as NodePath from "node:path";
 
 import type { CodexSettings } from "@t3tools/contracts";
+import { HostProcessPlatform, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
@@ -27,9 +28,9 @@ const MAX_IMPORT_MESSAGES = 2_000;
 const THREAD_LIST_PAGE_SIZE = 100;
 const INTERACTIVE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 
-function normalizePath(path: string): string {
+function normalizePath(path: string, platform: NodeJS.Platform): string {
   const resolved = NodePath.normalize(NodePath.resolve(path));
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function isoFromEpochSeconds(value: number | null | undefined, fallback: number): string {
@@ -77,8 +78,9 @@ function extractTranscript(
     for (const item of turn.items) {
       if (item.type === "userMessage") {
         const textInputs = item.content
-          .filter((input): input is Extract<(typeof item.content)[number], { type: "text" }> =>
-            input.type === "text",
+          .filter(
+            (input): input is Extract<(typeof item.content)[number], { type: "text" }> =>
+              input.type === "text",
           )
           .map((input) => input.text.trim())
           .filter((text) => text.length > 0);
@@ -128,7 +130,9 @@ export function makeCodexThreadImport(input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
 }): ProviderThreadImportShape {
-  const resolvedHomePath = input.config.homePath ? expandHomePath(input.config.homePath) : undefined;
+  const resolvedHomePath = input.config.homePath
+    ? expandHomePath(input.config.homePath)
+    : undefined;
   const launchArgs = resolveCodexLaunchArgs(input.config.launchArgs, input.environment);
   const environment = {
     ...input.environment,
@@ -136,12 +140,11 @@ export function makeCodexThreadImport(input: {
   };
 
   const withClient = <A, E>(
-    operation: (
-      client: CodexClient.CodexAppServerClient["Service"],
-    ) => Effect.Effect<A, E, never>,
+    operation: (client: CodexClient.CodexAppServerClient["Service"]) => Effect.Effect<A, E, never>,
     importOperation: "scan" | "read",
   ): Effect.Effect<A, ProviderThreadImportError> =>
     Effect.gen(function* () {
+      const workingDirectory = yield* HostProcessWorkingDirectory;
       const spawnCommand = yield* resolveSpawnCommand(
         input.config.binaryPath,
         codexAppServerArgs(launchArgs),
@@ -149,7 +152,7 @@ export function makeCodexThreadImport(input: {
       );
       const child = yield* input.spawner.spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          cwd: process.cwd(),
+          cwd: workingDirectory,
           env: environment,
           extendEnv: true,
           forceKillAfter: CODEX_IMPORT_FORCE_KILL_AFTER,
@@ -225,11 +228,13 @@ export function makeCodexThreadImport(input: {
     read: ({ projectRoot, externalThreadId, archived }) =>
       withClient(
         (client) =>
-          client
-            .request("thread/read", { threadId: externalThreadId, includeTurns: true })
-            .pipe(
-              Effect.flatMap((response) => {
-                if (normalizePath(String(response.thread.cwd)) !== normalizePath(projectRoot)) {
+          client.request("thread/read", { threadId: externalThreadId, includeTurns: true }).pipe(
+            Effect.flatMap((response) =>
+              Effect.flatMap(HostProcessPlatform, (platform) => {
+                if (
+                  normalizePath(String(response.thread.cwd), platform) !==
+                  normalizePath(projectRoot, platform)
+                ) {
                   return Effect.fail(
                     new ProviderThreadImportError({
                       operation: "read",
@@ -240,6 +245,7 @@ export function makeCodexThreadImport(input: {
                 return Effect.succeed(extractTranscript(response.thread, archived));
               }),
             ),
+          ),
         "read",
       ),
   };
