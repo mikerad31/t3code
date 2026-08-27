@@ -1,0 +1,66 @@
+name: T3 quota ws cleanup
+
+on:
+  push:
+    branches:
+      - feat/codex-quota-dashboard
+    paths:
+      - .github/workflows/t3-quota-ws-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore exact base and apply surgical reset RPC edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 2512cddce1539144a46978728829ecfccd0d90a5:apps/server/src/ws.ts > apps/server/src/ws.ts
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/server/src/ws.ts")
+          text = path.read_text()
+
+          import_marker = '} from "./observability/RpcInstrumentation.ts";\n'
+          reset_import = 'import { consumeProviderRateLimitResetCredit } from "./provider/consumeRateLimitResetCredit.ts";\n'
+          assert text.count(import_marker) == 1, "unexpected RpcInstrumentation import marker count"
+          text = text.replace(import_marker, import_marker + reset_import, 1)
+
+          handler_marker = '        [WS_METHODS.providerUploadFeedback]: (input) =>\n'
+          reset_handler = '''        [WS_METHODS.providerConsumeRateLimitResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeRateLimitResetCredit,
+            consumeProviderRateLimitResetCredit(input),
+            { "rpc.aggregate": "provider" },
+          ),
+'''
+          assert text.count(handler_marker) == 1, "unexpected providerUploadFeedback handler marker count"
+          text = text.replace(handler_marker, reset_handler + handler_marker, 1)
+
+          path.write_text(text)
+          PY
+
+          git diff --check
+          git diff -- apps/server/src/ws.ts
+
+      - name: Commit surgical ws cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- apps/server/src/ws.ts; then
+            echo "ws.ts already clean"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/server/src/ws.ts
+          git commit -m "fix: make reset RPC ws diff surgical"
+          git push origin HEAD:feat/codex-quota-dashboard
