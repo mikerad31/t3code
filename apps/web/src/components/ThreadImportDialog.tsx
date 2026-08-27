@@ -93,7 +93,6 @@ function ThreadImportTargetPanel(props: {
           .map((candidate) => String(candidate.candidateId)),
       ),
     );
-    setResultsById(new Map());
     setCommitError(null);
   }, [candidateKey]);
 
@@ -161,9 +160,7 @@ function ThreadImportTargetPanel(props: {
       {showEnvironmentLabel ? (
         <div className="flex items-center justify-between gap-3">
           <h3 className="truncate text-sm font-medium">{target.environmentLabel}</h3>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {candidates.length} found
-          </span>
+          <span className="shrink-0 text-xs text-muted-foreground">{candidates.length} found</span>
         </div>
       ) : null}
 
@@ -294,7 +291,10 @@ function ThreadImportTargetPanel(props: {
           {commitError ? <p className="text-xs text-destructive">{commitError}</p> : null}
 
           <div className="flex items-center justify-end">
-            <Button onClick={() => void importSelected()} disabled={selectedCount === 0 || isCommitting}>
+            <Button
+              onClick={() => void importSelected()}
+              disabled={selectedCount === 0 || isCommitting}
+            >
               {isCommitting
                 ? "Importing…"
                 : `Import ${selectedCount} conversation${selectedCount === 1 ? "" : "s"}`}
@@ -314,8 +314,8 @@ export function ThreadImportDialog(props: ThreadImportDialogProps) {
         <DialogHeader>
           <DialogTitle>Import conversations</DialogTitle>
           <DialogDescription>
-            Bring persisted Codex conversations into {projectTitle}. New conversations are selected by
-            default; imported conversations stay disabled so repeated scans are safe.
+            Bring persisted Codex conversations into {projectTitle}. New conversations are selected
+            by default; imported conversations stay disabled so repeated scans are safe.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-5">

@@ -188,12 +188,18 @@ export const makeThreadImportService = (input: {
 
       const importedIds = yield* existingThreadIds();
       const scanned: ScannedCandidate[] = [];
+      let successfulScans = 0;
+      let lastScanFailure: { readonly detail: string } | undefined;
       for (const instance of instances) {
         const continuationKey = instance.continuationIdentity.continuationKey;
         const result = yield* Effect.result(
           instance.threadImport.scan({ projectRoot: project.workspaceRoot }),
         );
-        if (Result.isFailure(result)) continue;
+        if (Result.isFailure(result)) {
+          lastScanFailure = result.failure;
+          continue;
+        }
+        successfulScans += 1;
 
         for (const source of result.success) {
           const candidateId = candidateIdFor({
@@ -220,6 +226,9 @@ export const makeThreadImportService = (input: {
             },
           });
         }
+      }
+      if (successfulScans === 0 && lastScanFailure !== undefined) {
+        return yield* Effect.fail(error("source-unavailable", lastScanFailure.detail));
       }
       return scanned.toSorted(
         (left, right) =>
