@@ -81,6 +81,13 @@ import {
 } from "./provider.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  ThreadImportCommitInput,
+  ThreadImportCommitResult,
+  ThreadImportError,
+  ThreadImportScanInput,
+  ThreadImportScanResult,
+} from "./threadImports.ts";
+import {
   PullRequestActionInput,
   PullRequestActivity,
   PullRequestCommentInput,
@@ -228,6 +235,10 @@ export const WS_METHODS = {
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
+
+  // Thread import methods
+  threadImportsScan: "threadImports.scan",
+  threadImportsCommit: "threadImports.commit",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -700,6 +711,18 @@ export const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFee
   error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
 });
 
+export const WsThreadImportsScanRpc = Rpc.make(WS_METHODS.threadImportsScan, {
+  payload: ThreadImportScanInput,
+  success: ThreadImportScanResult,
+  error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
+});
+
+export const WsThreadImportsCommitRpc = Rpc.make(WS_METHODS.threadImportsCommit, {
+  payload: ThreadImportCommitInput,
+  success: ThreadImportCommitResult,
+  error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -1072,6 +1095,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
   WsProviderUploadFeedbackRpc,
+  WsThreadImportsScanRpc,
+  WsThreadImportsCommitRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

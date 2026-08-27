@@ -86,8 +86,11 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import { makeThreadImportService } from "./threadImport/ThreadImportService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -471,8 +474,16 @@ const makeWsRpcLayer = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
+      const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerService = yield* ProviderService.ProviderService;
+      const providerSessions = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadImports = makeThreadImportService({
+        projection: projectionSnapshotQuery,
+        engine: orchestrationEngine,
+        providerInstances,
+        providerSessions,
+      });
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1603,6 +1614,14 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "provider" },
           ),
+        [WS_METHODS.threadImportsScan]: (input) =>
+          observeRpcEffect(WS_METHODS.threadImportsScan, threadImports.scan(input), {
+            "rpc.aggregate": "thread-import",
+          }),
+        [WS_METHODS.threadImportsCommit]: (input) =>
+          observeRpcEffect(WS_METHODS.threadImportsCommit, threadImports.commit(input), {
+            "rpc.aggregate": "thread-import",
+          }),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

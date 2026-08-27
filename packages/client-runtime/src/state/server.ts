@@ -728,6 +728,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
+    threadImportScan: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-import-scan",
+      tag: WS_METHODS.threadImportsScan,
+      staleTimeMs: 30_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -736,6 +741,14 @@ export function createServerEnvironmentAtoms<R, E>(
         stream.pipe(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
         ),
+    }),
+    threadImportCommit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:thread-import-commit",
+      tag: WS_METHODS.threadImportsCommit,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
