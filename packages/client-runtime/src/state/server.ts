@@ -745,6 +745,14 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    consumeRateLimitResetCredit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:provider:consume-rate-limit-reset-credit",
+      tag: WS_METHODS.providerConsumeRateLimitResetCredit,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.instanceId}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
