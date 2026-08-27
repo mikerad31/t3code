@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCodexLimitMessage } from "./SidebarCodexLimitsPopover.logic.ts";
+import {
+  parseCodexLimitMessage,
+  resolveCodexAccountLabel,
+} from "./SidebarCodexLimitsPopover.logic.ts";
 
 describe("parseCodexLimitMessage", () => {
   it("parses five-hour and weekly limits", () => {
@@ -31,5 +34,28 @@ describe("parseCodexLimitMessage", () => {
   it("ignores non-limit provider messages", () => {
     expect(parseCodexLimitMessage(undefined)).toEqual([]);
     expect(parseCodexLimitMessage("Codex is not authenticated.")).toEqual([]);
+  });
+});
+
+describe("resolveCodexAccountLabel", () => {
+  it("normalizes the generic default instance to A1 in a multi-account setup", () => {
+    expect(resolveCodexAccountLabel({ displayName: "Codex", ordinal: 0, accountCount: 3 })).toBe(
+      "A1",
+    );
+  });
+
+  it("preserves explicit account names", () => {
+    expect(resolveCodexAccountLabel({ displayName: "A2", ordinal: 1, accountCount: 3 })).toBe(
+      "A2",
+    );
+    expect(
+      resolveCodexAccountLabel({ displayName: "Personal", ordinal: 0, accountCount: 2 }),
+    ).toBe("Personal");
+  });
+
+  it("keeps the normal Codex label for a single account", () => {
+    expect(resolveCodexAccountLabel({ displayName: "Codex", ordinal: 0, accountCount: 1 })).toBe(
+      "Codex",
+    );
   });
 });
