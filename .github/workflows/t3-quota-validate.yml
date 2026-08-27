@@ -5,6 +5,9 @@ on:
     branches: [feat/codex-quota-dashboard]
     paths: [.github/workflows/t3-quota-validate.yml]
 
+permissions:
+  contents: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -17,10 +20,23 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: true
-      - name: Check formatting and lint
+      - name: Apply repository formatting
+        run: vp check --fix
+      - name: Commit formatter output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "style(codex): apply repository formatting"
+          git push origin HEAD:feat/codex-quota-dashboard
+      - name: Verify formatting and lint
         run: vp check
       - name: Typecheck
         run: vpr typecheck
       - name: Test quota and reset domain
         working-directory: apps/server
         run: vp test run src/provider/Layers/CodexRateLimits.test.ts src/provider/consumeRateLimitResetCredit.test.ts
+      - name: Test quota parser
+        working-directory: apps/web
+        run: vp test run src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
