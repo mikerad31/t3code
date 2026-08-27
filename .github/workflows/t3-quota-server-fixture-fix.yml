@@ -22,38 +22,20 @@ jobs:
           path = Path("apps/server/src/server.test.ts")
           text = path.read_text(encoding="utf-8")
 
-          old = '''import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
-import * as ProviderService from "./provider/Services/ProviderService.ts";'''
-          new = '''import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
-import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
-import * as ProviderService from "./provider/Services/ProviderService.ts";'''
+          old = 'import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";\nimport * as ProviderService from "./provider/Services/ProviderService.ts";'
+          new = 'import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";\nimport * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";\nimport * as ProviderService from "./provider/Services/ProviderService.ts";'
           if text.count(old) != 1:
               raise RuntimeError(f"provider import anchor mismatch: {text.count(old)}")
           text = text.replace(old, new, 1)
 
-          old = '''    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
-    providerService?: Partial<ProviderService.ProviderService["Service"]>;'''
-          new = '''    providerInstanceRegistry?: Partial<ProviderInstanceRegistry.ProviderInstanceRegistryShape>;
-    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
-    providerService?: Partial<ProviderService.ProviderService["Service"]>;'''
+          old = '    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;\n    providerService?: Partial<ProviderService.ProviderService["Service"]>;'
+          new = '    providerInstanceRegistry?: Partial<ProviderInstanceRegistry.ProviderInstanceRegistryShape>;\n    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;\n    providerService?: Partial<ProviderService.ProviderService["Service"]>;'
           if text.count(old) != 1:
               raise RuntimeError(f"provider layer option anchor mismatch: {text.count(old)}")
           text = text.replace(old, new, 1)
 
-          old = '''          Layer.mock(ProviderService.ProviderService)({
-            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'''
-          new = '''          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-            getInstance: () => Effect.succeed(undefined),
-            listInstances: Effect.succeed([]),
-            listUnavailable: Effect.succeed([]),
-            streamChanges: Stream.empty,
-            subscribeChanges: Effect.die(
-              "ProviderInstanceRegistry subscription is not stubbed in this test",
-            ),
-            ...options?.layers?.providerInstanceRegistry,
-          }),
-          Layer.mock(ProviderService.ProviderService)({
-            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'''
+          old = '          Layer.mock(ProviderService.ProviderService)({\n            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'
+          new = '          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({\n            getInstance: () => Effect.succeed(undefined),\n            listInstances: Effect.succeed([]),\n            listUnavailable: Effect.succeed([]),\n            streamChanges: Stream.empty,\n            subscribeChanges: Effect.die(\n              "ProviderInstanceRegistry subscription is not stubbed in this test",\n            ),\n            ...options?.layers?.providerInstanceRegistry,\n          }),\n          Layer.mock(ProviderService.ProviderService)({\n            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'
           if text.count(old) != 1:
               raise RuntimeError(f"provider service layer anchor mismatch: {text.count(old)}")
           text = text.replace(old, new, 1)
