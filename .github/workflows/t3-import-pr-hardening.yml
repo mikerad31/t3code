@@ -1,0 +1,44 @@
+name: T3 importer PR hardening
+
+on:
+  push:
+    branches:
+      - feat/codex-thread-import
+    paths:
+      - .github/workflows/t3-import-pr-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply guarded importer hardening patch
+        run: python .github/scripts/t3_import_pr_hardening.py
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Server typecheck
+        working-directory: apps/server
+        run: vp run typecheck
+      - name: Importer service tests
+        run: vp test run apps/server/src/threadImport/ThreadImportService.test.ts
+      - name: Web typecheck
+        working-directory: apps/web
+        run: vp run typecheck
+      - name: Diff check
+        run: git diff --check
+      - name: Commit hardened product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/server/src/threadImport/ThreadImportService.ts apps/web/src/components/ThreadImportDialog.tsx
+          git diff --cached --check
+          git commit -m "fix(import): preserve diagnostics and surface scan failures"
+          git push origin HEAD:feat/codex-thread-import
