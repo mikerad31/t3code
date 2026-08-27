@@ -98,6 +98,7 @@ function makeProvider(threadImport: ProviderThreadImportShape): ProviderInstance
 
 function makeHarness(options: {
   readonly candidates: ReadonlyArray<ProviderThreadImportCandidate>;
+  readonly scan?: ProviderThreadImportShape["scan"];
   readonly read: ProviderThreadImportShape["read"];
   readonly sessionUpsert?: ProviderSessionDirectory["Service"]["upsert"];
 }) {
@@ -126,6 +127,8 @@ function makeHarness(options: {
         importedThread = {
           id: command.threadId,
           projectId: command.projectId,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
         } as OrchestrationThreadShell;
       }
       return Effect.succeed({ sequence: commands.length });
@@ -136,7 +139,7 @@ function makeHarness(options: {
   } as OrchestrationEngineService["Service"];
 
   const provider = makeProvider({
-    scan: () => Effect.succeed(options.candidates),
+    scan: options.scan ?? (() => Effect.succeed(options.candidates)),
     read: options.read,
   });
   const providerInstances = {
@@ -148,14 +151,21 @@ function makeHarness(options: {
   } as ProviderInstanceRegistry["Service"];
 
   const providerSessions = {
-    upsert:
-      options.sessionUpsert ??
-      ((binding: ProviderRuntimeBinding) => {
-        bindings.push(binding);
-        return Effect.void;
-      }),
+    upsert: (binding: ProviderRuntimeBinding) =>
+      (options.sessionUpsert?.(binding) ?? Effect.void).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            bindings.push(binding);
+          }),
+        ),
+      ),
     getProvider: () => Effect.die("not used by thread import tests"),
-    getBinding: () => Effect.succeed(Option.none()),
+    getBinding: (threadId: OrchestrationThreadShell["id"]) => {
+      const binding = bindings.findLast(
+        (candidate) => String(candidate.threadId) === String(threadId),
+      );
+      return Effect.succeed(binding === undefined ? Option.none() : Option.some(binding));
+    },
     listThreadIds: () => Effect.succeed([]),
     listBindings: () => Effect.succeed([]),
   } as ProviderSessionDirectory["Service"];
@@ -263,6 +273,86 @@ describe("ThreadImportService", () => {
     expect(result.results[0]?.status).toBe("transcript-only");
     expect(result.results[0]?.warnings.join(" ")).toContain("resume state could not be saved");
     expect(harness.commands).toHaveLength(1);
+  });
+
+  it("repairs missing native resume state on retry without duplicating the transcript", async () => {
+    let rejectBinding = true;
+    const harness = makeHarness({
+      candidates: [sourceCandidate()],
+      read: () => Effect.succeed(sourceTranscript()),
+      sessionUpsert: () =>
+        rejectBinding
+          ? Effect.fail(
+              new ProviderValidationError({
+                operation: "thread-import-resume-binding",
+                issue: "simulated persistence rejection",
+              }),
+            )
+          : Effect.void,
+    });
+
+    const initialScan = await Effect.runPromise(harness.service.scan({ projectId }));
+    const candidateId = initialScan.candidates[0]!.candidateId;
+    const firstCommit = await Effect.runPromise(
+      harness.service.commit({
+        projectId,
+        candidateIds: [candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      }),
+    );
+    expect(firstCommit.results[0]?.status).toBe("transcript-only");
+    expect(harness.commands).toHaveLength(1);
+    expect(harness.bindings).toHaveLength(0);
+
+    const repairScan = await Effect.runPromise(harness.service.scan({ projectId }));
+    expect(repairScan.candidates[0]).toMatchObject({
+      candidateId,
+      alreadyImported: false,
+      canResume: false,
+    });
+    expect(repairScan.candidates[0]?.warnings.join(" ")).toContain("needs repair");
+
+    rejectBinding = false;
+    const repairCommit = await Effect.runPromise(
+      harness.service.commit({
+        projectId,
+        candidateIds: [candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      }),
+    );
+    expect(repairCommit.results[0]?.status).toBe("already-imported");
+    expect(repairCommit.results[0]?.importedMessageCount).toBe(0);
+    expect(repairCommit.results[0]?.warnings.join(" ")).toContain("was restored");
+    expect(harness.commands).toHaveLength(1);
+    expect(harness.bindings).toHaveLength(1);
+
+    const repairedScan = await Effect.runPromise(harness.service.scan({ projectId }));
+    expect(repairedScan.candidates[0]).toMatchObject({
+      candidateId,
+      alreadyImported: true,
+      canResume: true,
+    });
+  });
+
+  it("surfaces a total Codex scan failure instead of reporting empty history", async () => {
+    const harness = makeHarness({
+      candidates: [],
+      scan: () =>
+        Effect.fail(
+          new ProviderThreadImportError({
+            operation: "scan",
+            detail: "simulated Codex history scan failure",
+          }),
+        ),
+      read: () => Effect.succeed(sourceTranscript()),
+    });
+
+    await expect(Effect.runPromise(harness.service.scan({ projectId }))).rejects.toMatchObject({
+      code: "source-unavailable",
+      message: "simulated Codex history scan failure",
+    });
   });
 
   it("isolates transcript read failures so another selected conversation can still import", async () => {

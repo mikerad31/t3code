@@ -31,7 +31,10 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import type { ProviderThreadImportShape } from "../provider/ProviderThreadImport.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
-import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
+import {
+  type ProviderRuntimeBinding,
+  ProviderSessionDirectory,
+} from "../provider/Services/ProviderSessionDirectory.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -138,6 +141,28 @@ interface ScannedCandidate {
   readonly archived: boolean;
 }
 
+function codexResumeThreadId(resumeCursor: unknown): string | undefined {
+  if (resumeCursor === null || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
+    return undefined;
+  }
+  const raw = "threadId" in resumeCursor ? resumeCursor.threadId : undefined;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : undefined;
+}
+
+function hasMatchingCodexResumeBinding(
+  binding: ProviderRuntimeBinding | undefined,
+  input: {
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly externalThreadId: string;
+  },
+): boolean {
+  return (
+    binding?.provider === CODEX_DRIVER &&
+    binding.providerInstanceId === input.providerInstanceId &&
+    codexResumeThreadId(binding.resumeCursor) === input.externalThreadId
+  );
+}
+
 export interface ThreadImportServiceShape {
   readonly scan: (
     input: ThreadImportScanInput,
@@ -207,6 +232,26 @@ export const makeThreadImportService = (input: {
             externalThreadId: source.externalThreadId,
             projectRoot: project.workspaceRoot,
           });
+          const threadId = importedThreadId(candidateId);
+          const transcriptAlreadyImported = importedIds.has(String(threadId));
+          const persistedBinding = transcriptAlreadyImported
+            ? yield* providerSessions.getBinding(threadId).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.orElseSucceed(() => undefined),
+              )
+            : undefined;
+          const nativeResumeReady =
+            !transcriptAlreadyImported ||
+            hasMatchingCodexResumeBinding(persistedBinding, {
+              providerInstanceId: instance.instanceId,
+              externalThreadId: source.externalThreadId,
+            });
+          const repairWarnings =
+            transcriptAlreadyImported && !nativeResumeReady
+              ? [
+                  "The transcript is already imported, but native Codex resume state needs repair. Re-import to restore it.",
+                ]
+              : [];
           scanned.push({
             instance,
             continuationKey,
@@ -220,9 +265,9 @@ export const makeThreadImportService = (input: {
               createdAt: source.createdAt as ThreadImportCandidate["createdAt"],
               updatedAt: source.updatedAt as ThreadImportCandidate["updatedAt"],
               archived: source.archived,
-              canResume: true,
-              alreadyImported: importedIds.has(String(importedThreadId(candidateId))),
-              warnings: [...source.warnings],
+              canResume: nativeResumeReady,
+              alreadyImported: transcriptAlreadyImported && nativeResumeReady,
+              warnings: [...source.warnings, ...repairWarnings],
             },
           });
         }
@@ -270,15 +315,33 @@ export const makeThreadImportService = (input: {
         }
 
         const threadId = importedThreadId(candidateId);
-        if (importedIds.has(String(threadId))) {
-          results.push({
-            candidateId,
-            status: "already-imported",
-            threadId,
-            importedMessageCount: 0,
-            warnings: [...source.candidate.warnings],
-          });
-          continue;
+        const transcriptAlreadyImported = importedIds.has(String(threadId));
+        let existingThread = transcriptAlreadyImported
+          ? yield* projection.getThreadShellById(threadId).pipe(
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            )
+          : undefined;
+        if (transcriptAlreadyImported) {
+          const persistedBinding = yield* providerSessions.getBinding(threadId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.orElseSucceed(() => undefined),
+          );
+          if (
+            hasMatchingCodexResumeBinding(persistedBinding, {
+              providerInstanceId: source.instance.instanceId,
+              externalThreadId: source.candidate.externalThreadId,
+            })
+          ) {
+            results.push({
+              candidateId,
+              status: "already-imported",
+              threadId,
+              importedMessageCount: 0,
+              warnings: [...source.candidate.warnings],
+            });
+            continue;
+          }
         }
 
         const transcriptResult = yield* Effect.result(
@@ -291,8 +354,8 @@ export const makeThreadImportService = (input: {
         if (Result.isFailure(transcriptResult)) {
           results.push({
             candidateId,
-            status: "failed",
-            threadId: null,
+            status: transcriptAlreadyImported ? "transcript-only" : "failed",
+            threadId: transcriptAlreadyImported ? threadId : null,
             importedMessageCount: 0,
             warnings: [...source.candidate.warnings],
             error: transcriptResult.failure.detail,
@@ -302,7 +365,7 @@ export const makeThreadImportService = (input: {
 
         const transcript = transcriptResult.success;
         const messages = importMessages(candidateId, transcript.messages);
-        if (messages.length === 0) {
+        if (!transcriptAlreadyImported && messages.length === 0) {
           results.push({
             candidateId,
             status: "failed",
@@ -314,54 +377,57 @@ export const makeThreadImportService = (input: {
           continue;
         }
 
-        const snapshot = yield* source.instance.snapshot.getSnapshot;
-        const modelSelection = modelSelectionFor(
-          source.instance.instanceId,
-          snapshot,
-          project.defaultModelSelection,
-        );
-        const dispatchResult = yield* Effect.result(
-          engine.dispatch({
-            type: "thread.import",
-            commandId: CommandId.make(`import:${String(candidateId)}`),
-            threadId,
-            projectId: request.projectId,
-            title: transcript.title.slice(0, 96),
-            modelSelection,
-            runtimeMode: request.runtimeMode,
-            interactionMode: request.interactionMode,
-            messages,
-            createdAt: transcript.createdAt,
-            updatedAt: transcript.updatedAt,
-          }),
-        );
-        if (Result.isFailure(dispatchResult)) {
-          const existing = yield* projection.getThreadShellById(threadId).pipe(
-            Effect.map(Option.isSome),
-            Effect.orElseSucceed(() => false),
+        const modelSelection =
+          existingThread !== undefined
+            ? existingThread.modelSelection
+            : modelSelectionFor(
+                source.instance.instanceId,
+                yield* source.instance.snapshot.getSnapshot,
+                project.defaultModelSelection,
+              );
+        const runtimeMode = existingThread?.runtimeMode ?? request.runtimeMode;
+        let materializedBeforeBinding = transcriptAlreadyImported;
+
+        if (!transcriptAlreadyImported) {
+          const dispatchResult = yield* Effect.result(
+            engine.dispatch({
+              type: "thread.import",
+              commandId: CommandId.make(`import:${String(candidateId)}`),
+              threadId,
+              projectId: request.projectId,
+              title: transcript.title.slice(0, 96),
+              modelSelection,
+              runtimeMode: request.runtimeMode,
+              interactionMode: request.interactionMode,
+              messages,
+              createdAt: transcript.createdAt,
+              updatedAt: transcript.updatedAt,
+            }),
           );
-          results.push(
-            existing
-              ? {
-                  candidateId,
-                  status: "already-imported",
-                  threadId,
-                  importedMessageCount: messages.length,
-                  warnings: [...transcript.warnings],
-                }
-              : {
-                  candidateId,
-                  status: "failed",
-                  threadId: null,
-                  importedMessageCount: 0,
-                  warnings: [...transcript.warnings],
-                  error: "T3 could not materialize the imported thread.",
-                },
-          );
-          continue;
+          if (Result.isFailure(dispatchResult)) {
+            const concurrentThread = yield* projection.getThreadShellById(threadId).pipe(
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            );
+            if (concurrentThread === undefined) {
+              results.push({
+                candidateId,
+                status: "failed",
+                threadId: null,
+                importedMessageCount: 0,
+                warnings: [...transcript.warnings],
+                error: "T3 could not materialize the imported thread.",
+              });
+              continue;
+            }
+            existingThread = concurrentThread;
+            materializedBeforeBinding = true;
+          }
         }
 
-        let status: ThreadImportItemResult["status"] = "imported";
+        let status: ThreadImportItemResult["status"] = materializedBeforeBinding
+          ? "already-imported"
+          : "imported";
         const bindingResult = yield* Effect.result(
           providerSessions.upsert({
             threadId,
@@ -369,10 +435,10 @@ export const makeThreadImportService = (input: {
             providerInstanceId: source.instance.instanceId,
             status: "stopped",
             resumeCursor: transcript.resumeCursor,
-            runtimeMode: request.runtimeMode,
+            runtimeMode: existingThread?.runtimeMode ?? runtimeMode,
             runtimePayload: {
               cwd: transcript.sourceCwd,
-              modelSelection,
+              modelSelection: existingThread?.modelSelection ?? modelSelection,
             },
           }),
         );
@@ -380,7 +446,13 @@ export const makeThreadImportService = (input: {
         if (Result.isFailure(bindingResult)) {
           status = "transcript-only";
           warnings.push(
-            "The transcript was imported, but native Codex resume state could not be saved.",
+            materializedBeforeBinding
+              ? "The transcript is already imported, but native Codex resume state could not be restored."
+              : "The transcript was imported, but native Codex resume state could not be saved.",
+          );
+        } else if (materializedBeforeBinding) {
+          warnings.push(
+            "Native Codex resume state was restored without duplicating the transcript.",
           );
         }
 
@@ -388,7 +460,7 @@ export const makeThreadImportService = (input: {
           candidateId,
           status,
           threadId,
-          importedMessageCount: messages.length,
+          importedMessageCount: materializedBeforeBinding ? 0 : messages.length,
           warnings,
         });
         importedIds.add(String(threadId));
