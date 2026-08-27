@@ -1,0 +1,75 @@
+name: Validate automatic project Codex import
+
+on:
+  push:
+    branches:
+      - feat/codex-thread-import
+    paths:
+      - .github/workflows/tmp-auto-import-validate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply guarded auto-import patch
+        run: |
+          set -euo pipefail
+          python scripts/tmp-auto-import-project.py
+
+      - name: Apply repository formatting
+        run: vp check --fix
+
+      - name: Repository conformance
+        run: vp check
+
+      - name: Typecheck
+        run: vpr typecheck
+
+      - name: Web tests
+        run: vp run --filter @t3tools/web test
+
+      - name: Diff sanity
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+
+      - name: Create validated Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          files=(
+            apps/web/src/components/CommandPalette.tsx
+            apps/web/src/components/CommandPalette.logic.ts
+            apps/web/src/components/CommandPalette.logic.test.ts
+          )
+          : > /tmp/blob-shas.txt
+          for file in "${files[@]}"; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s\t%s\n' "$sha" "$file" >> /tmp/blob-shas.txt
+          done
+          cat /tmp/blob-shas.txt
+
+      - name: Upload blob manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: auto-import-project-blobs
+          path: /tmp/blob-shas.txt
+          retention-days: 1
