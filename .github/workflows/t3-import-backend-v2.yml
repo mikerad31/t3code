@@ -1,0 +1,81 @@
+name: T3 importer backend wiring v2
+
+on:
+  push:
+    branches: [feat/codex-thread-import]
+    paths: [.github/workflows/t3-import-backend-v2.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Wire internal import command and existing event projection
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str, label: str):
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected one match, found {count}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+          # 1) Internal-only command contract. Reuse existing projected events;
+          # clients never get to dispatch this command directly.
+          orchestration = "packages/contracts/src/orchestration.ts"
+          import_schema = '''/** Server-internal atomic import of one historical provider conversation. */\nconst ThreadImportCommandMessage = Schema.Struct({\n  id: MessageId,\n  role: OrchestrationMessageRole,\n  text: Schema.String,\n  createdAt: IsoDateTime,\n});\n\nconst ThreadImportCommand = Schema.Struct({\n  type: Schema.Literal("thread.import"),\n  commandId: CommandId,\n  threadId: ThreadId,\n  projectId: ProjectId,\n  title: TrimmedNonEmptyString,\n  modelSelection: ModelSelection,\n  runtimeMode: RuntimeMode,\n  interactionMode: ProviderInteractionMode.pipe(\n    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),\n  ),\n  messages: Schema.Array(ThreadImportCommandMessage),\n  createdAt: IsoDateTime,\n  updatedAt: IsoDateTime,\n});\n\n'''
+          replace_once(
+              orchestration,
+              'const ThreadSessionSetCommand = Schema.Struct({',
+              import_schema + 'const ThreadSessionSetCommand = Schema.Struct({',
+              "insert ThreadImportCommand",
+          )
+          replace_once(
+              orchestration,
+              'const InternalOrchestrationCommand = Schema.Union([\n  ThreadSessionSetCommand,',
+              'const InternalOrchestrationCommand = Schema.Union([\n  ThreadImportCommand,\n  ThreadSessionSetCommand,',
+              "add ThreadImportCommand to internal union",
+          )
+
+          # 2) Atomic command expands to ordinary thread.created/message-sent/
+          # meta-updated events, so every existing projector/storage path stays canonical.
+          decider = "apps/server/src/orchestration/decider.ts"
+          import_case = '''    case "thread.import": {\n      yield* requireProject({\n        readModel,\n        command,\n        projectId: command.projectId,\n      });\n      yield* requireThreadAbsent({\n        readModel,\n        command,\n        threadId: command.threadId,\n      });\n\n      const createdEvent: Omit<OrchestrationEvent, "sequence"> = {\n        ...(yield* withEventBase({\n          aggregateKind: "thread",\n          aggregateId: command.threadId,\n          occurredAt: command.createdAt,\n          commandId: command.commandId,\n        })),\n        type: "thread.created",\n        payload: {\n          threadId: command.threadId,\n          projectId: command.projectId,\n          title: command.title,\n          modelSelection: command.modelSelection,\n          runtimeMode: command.runtimeMode,\n          interactionMode: command.interactionMode,\n          branch: null,\n          worktreePath: null,\n          createdAt: command.createdAt,\n          updatedAt: command.createdAt,\n        },\n      };\n\n      const messageEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];\n      for (const message of command.messages) {\n        messageEvents.push({\n          ...(yield* withEventBase({\n            aggregateKind: "thread",\n            aggregateId: command.threadId,\n            occurredAt: message.createdAt,\n            commandId: command.commandId,\n          })),\n          type: "thread.message-sent",\n          payload: {\n            threadId: command.threadId,\n            messageId: message.id,\n            role: message.role,\n            text: message.text,\n            turnId: null,\n            streaming: false,\n            createdAt: message.createdAt,\n            updatedAt: message.createdAt,\n          },\n        });\n      }\n\n      const timestampEvent: Omit<OrchestrationEvent, "sequence"> = {\n        ...(yield* withEventBase({\n          aggregateKind: "thread",\n          aggregateId: command.threadId,\n          occurredAt: command.updatedAt,\n          commandId: command.commandId,\n        })),\n        type: "thread.meta-updated",\n        payload: {\n          threadId: command.threadId,\n          updatedAt: command.updatedAt,\n        },\n      };\n\n      return [createdEvent, ...messageEvents, timestampEvent];\n    }\n\n'''
+          replace_once(
+              decider,
+              '    case "thread.delete": {',
+              import_case + '    case "thread.delete": {',
+              "insert thread.import decider",
+          )
+
+          # 3) Preserve the provider history timestamps instead of stamping import time.
+          service = "apps/server/src/threadImport/ThreadImportService.ts"
+          replace_once(
+              service,
+              '            createdAt: yield* nowIso,\n          }),',
+              '            createdAt: transcript.createdAt,\n            updatedAt: transcript.updatedAt,\n          }),',
+              "preserve transcript timestamps",
+          )
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Capture typecheck
+        run: vpr typecheck > .t3-import-backend-v2-typecheck.txt 2>&1 || true
+      - name: Commit backend slice and diagnostics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/contracts/src/orchestration.ts apps/server/src/orchestration/decider.ts apps/server/src/threadImport/ThreadImportService.ts .t3-import-backend-v2-typecheck.txt
+          git commit -m "feat(import): persist historical Codex threads through orchestration"
+          git push origin HEAD:feat/codex-thread-import
