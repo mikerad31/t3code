@@ -41,9 +41,7 @@ describe("parseCodexLimitMessage", () => {
 describe("parseCodexBankedResetCount", () => {
   it("parses positive and zero banked reset counts", () => {
     expect(
-      parseCodexBankedResetCount(
-        "Limits — 5h: 99% left · Weekly: 51% left · Banked resets: 2",
-      ),
+      parseCodexBankedResetCount("Limits — 5h: 99% left · Weekly: 51% left · Banked resets: 2"),
     ).toBe(2);
     expect(parseCodexBankedResetCount("Limits — Banked resets: 0")).toBe(0);
   });
@@ -65,12 +63,10 @@ describe("resolveCodexAccountLabel", () => {
   });
 
   it("preserves explicit account names", () => {
-    expect(resolveCodexAccountLabel({ displayName: "A2", ordinal: 1, accountCount: 3 })).toBe(
-      "A2",
+    expect(resolveCodexAccountLabel({ displayName: "A2", ordinal: 1, accountCount: 3 })).toBe("A2");
+    expect(resolveCodexAccountLabel({ displayName: "Personal", ordinal: 0, accountCount: 2 })).toBe(
+      "Personal",
     );
-    expect(
-      resolveCodexAccountLabel({ displayName: "Personal", ordinal: 0, accountCount: 2 }),
-    ).toBe("Personal");
   });
 
   it("keeps the normal Codex label for a single account", () => {

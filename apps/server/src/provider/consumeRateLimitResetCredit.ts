@@ -18,49 +18,49 @@ import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
  * in clients. A refresh failure does not rewrite the consume outcome; the next
  * manual/background refresh can still converge the display.
  */
-export const consumeProviderRateLimitResetCredit = Effect.fn(
-  "consumeProviderRateLimitResetCredit",
-)(function* (
-  input: ProviderConsumeRateLimitResetCreditInput,
-): Effect.fn.Return<
-  ProviderConsumeRateLimitResetCreditResult,
-  ProviderConsumeRateLimitResetCreditError,
-  ProviderInstanceRegistry | ProviderRegistry
-> {
-  const instanceRegistry = yield* ProviderInstanceRegistry;
-  const providerRegistry = yield* ProviderRegistry;
-  const instance = yield* instanceRegistry.getInstance(input.instanceId);
+export const consumeProviderRateLimitResetCredit = Effect.fn("consumeProviderRateLimitResetCredit")(
+  function* (
+    input: ProviderConsumeRateLimitResetCreditInput,
+  ): Effect.fn.Return<
+    ProviderConsumeRateLimitResetCreditResult,
+    ProviderConsumeRateLimitResetCreditError,
+    ProviderInstanceRegistry | ProviderRegistry
+  > {
+    const instanceRegistry = yield* ProviderInstanceRegistry;
+    const providerRegistry = yield* ProviderRegistry;
+    const instance = yield* instanceRegistry.getInstance(input.instanceId);
 
-  if (!instance) {
-    return yield* new ProviderConsumeRateLimitResetCreditError({
-      instanceId: input.instanceId,
-      reason: "instanceNotFound",
-    });
-  }
+    if (!instance) {
+      return yield* new ProviderConsumeRateLimitResetCreditError({
+        instanceId: input.instanceId,
+        reason: "instanceNotFound",
+      });
+    }
 
-  const consume = instance.accountActions?.consumeRateLimitResetCredit;
-  if (!consume) {
-    return yield* new ProviderConsumeRateLimitResetCreditError({
-      instanceId: input.instanceId,
-      reason: "unsupported",
-    });
-  }
+    const consume = instance.accountActions?.consumeRateLimitResetCredit;
+    if (!consume) {
+      return yield* new ProviderConsumeRateLimitResetCreditError({
+        instanceId: input.instanceId,
+        reason: "unsupported",
+      });
+    }
 
-  const outcome = yield* consume({ idempotencyKey: input.idempotencyKey }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ProviderConsumeRateLimitResetCreditError({
-          instanceId: input.instanceId,
-          reason: "consumeFailed",
-          detail: cause.message,
-          cause,
-        }),
-    ),
-  );
+    const outcome = yield* consume({ idempotencyKey: input.idempotencyKey }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderConsumeRateLimitResetCreditError({
+            instanceId: input.instanceId,
+            reason: "consumeFailed",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
 
-  yield* providerRegistry
-    .refreshInstance(input.instanceId)
-    .pipe(Effect.ignoreCause({ log: true }));
+    yield* providerRegistry
+      .refreshInstance(input.instanceId)
+      .pipe(Effect.ignoreCause({ log: true }));
 
-  return { outcome };
-});
+    return { outcome };
+  },
+);

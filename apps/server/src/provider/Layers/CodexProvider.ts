@@ -202,7 +202,8 @@ export function applyPreferredCodexDefaultModel(
   );
   if (!preferredSlug) return models;
   return models.map((model) => {
-    if (model.slug === preferredSlug) return model.isDefault ? model : { ...model, isDefault: true };
+    if (model.slug === preferredSlug)
+      return model.isDefault ? model : { ...model, isDefault: true };
     if (!model.isDefault) return model;
     const { isDefault: _isDefault, ...rest } = model;
     return rest;
@@ -231,10 +232,13 @@ function parseCodexSkillsListResponse(
   cwd: string,
 ): ReadonlyArray<ServerProviderSkill> {
   const matchingEntry = response.data.find((entry) => entry.cwd === cwd);
-  const skills = matchingEntry ? matchingEntry.skills : response.data.flatMap((entry) => entry.skills);
+  const skills = matchingEntry
+    ? matchingEntry.skills
+    : response.data.flatMap((entry) => entry.skills);
 
   return skills.map((skill) => {
-    const shortDescription = skill.shortDescription ?? skill.interface?.shortDescription ?? undefined;
+    const shortDescription =
+      skill.shortDescription ?? skill.interface?.shortDescription ?? undefined;
     const parsedSkill: Types.Mutable<ServerProviderSkill> = {
       name: skill.name,
       path: skill.path,
@@ -285,10 +289,14 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ...input.environment,
     ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
   };
-  const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, codexAppServerArgs(input.launchArgs), {
-    env: environment,
-    extendEnv: true,
-  });
+  const spawnCommand = yield* resolveSpawnCommand(
+    input.binaryPath,
+    codexAppServerArgs(input.launchArgs),
+    {
+      env: environment,
+      extendEnv: true,
+    },
+  );
   const child = yield* spawner
     .spawn(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -309,7 +317,9 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       ),
     );
   const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
-  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(clientContext));
+  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+    Effect.provide(clientContext),
+  );
 
   const initialize = yield* client.request("initialize", buildCodexInitializeParams());
   yield* client.notify("initialized", undefined);
@@ -349,7 +359,9 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     version,
-    models: applyPreferredCodexDefaultModel(appendCustomCodexModels(models, input.customModels ?? [])),
+    models: applyPreferredCodexDefaultModel(
+      appendCustomCodexModels(models, input.customModels ?? []),
+    ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
     rateLimits: rateLimitsResponse?.rateLimits ?? null,
     rateLimitResetCredits: rateLimitsResponse?.rateLimitResetCredits ?? null,
@@ -362,10 +374,17 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
     const trimmed = model.trim();
     if (trimmed.length > 0) models.add(trimmed);
   }
-  return Array.from(models, (model) => ({ slug: model, name: model, isCustom: true, capabilities: null }));
+  return Array.from(models, (model) => ({
+    slug: model,
+    name: model,
+    isCustom: true,
+    capabilities: null,
+  }));
 };
 
-const makePendingCodexProvider = (codexSettings: CodexSettings): Effect.Effect<ServerProviderDraft> =>
+const makePendingCodexProvider = (
+  codexSettings: CodexSettings,
+): Effect.Effect<ServerProviderDraft> =>
   Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
     const models = emptyCodexModelsFromSettings(codexSettings);
@@ -440,7 +459,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
   > = probeCodexAppServerProvider,
   environment?: NodeJS.ProcessEnv,
-): Effect.fn.Return<ServerProviderDraft, ServerSettingsError, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.fn.Return<
+  ServerProviderDraft,
+  ServerSettingsError,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const emptyModels = emptyCodexModelsFromSettings(codexSettings);

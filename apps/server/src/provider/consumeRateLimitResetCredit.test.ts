@@ -44,62 +44,64 @@ function resetInstance(input: {
   } as ProviderInstance;
 }
 
-it.effect("routes a reset only to the exact provider instance and preserves the idempotency key", () => {
-  const consumeCalls: Array<{ readonly instanceId: string; readonly idempotencyKey: string }> = [];
-  const refreshCalls: string[] = [];
-  const instances = new Map([
-    [
-      A1,
-      resetInstance({
-        instanceId: A1,
-        onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A1, idempotencyKey }),
-      }),
-    ],
-    [
-      A2,
-      resetInstance({
-        instanceId: A2,
-        onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A2, idempotencyKey }),
-      }),
-    ],
-    [
-      A3,
-      resetInstance({
-        instanceId: A3,
-        onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A3, idempotencyKey }),
-      }),
-    ],
-  ]);
-
-  return Effect.gen(function* () {
-    const result = yield* consumeProviderRateLimitResetCredit({
-      instanceId: A2,
-      idempotencyKey: "redeem-a2-once",
-    });
-
-    assert.deepStrictEqual(result, { outcome: "reset" });
-    assert.deepStrictEqual(consumeCalls, [
-      { instanceId: "A2", idempotencyKey: "redeem-a2-once" },
-    ]);
-    assert.deepStrictEqual(refreshCalls, ["A2"]);
-  }).pipe(
-    Effect.provideService(ProviderInstanceRegistry, instanceRegistryFor(instances)),
-    Effect.provideService(
-      ProviderRegistry,
-      providerRegistryWith((instanceId) =>
-        Effect.sync(() => {
-          refreshCalls.push(instanceId);
-          return [];
+it.effect(
+  "routes a reset only to the exact provider instance and preserves the idempotency key",
+  () => {
+    const consumeCalls: Array<{ readonly instanceId: string; readonly idempotencyKey: string }> =
+      [];
+    const refreshCalls: string[] = [];
+    const instances = new Map([
+      [
+        A1,
+        resetInstance({
+          instanceId: A1,
+          onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A1, idempotencyKey }),
         }),
+      ],
+      [
+        A2,
+        resetInstance({
+          instanceId: A2,
+          onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A2, idempotencyKey }),
+        }),
+      ],
+      [
+        A3,
+        resetInstance({
+          instanceId: A3,
+          onConsume: (idempotencyKey) => consumeCalls.push({ instanceId: A3, idempotencyKey }),
+        }),
+      ],
+    ]);
+
+    return Effect.gen(function* () {
+      const result = yield* consumeProviderRateLimitResetCredit({
+        instanceId: A2,
+        idempotencyKey: "redeem-a2-once",
+      });
+
+      assert.deepStrictEqual(result, { outcome: "reset" });
+      assert.deepStrictEqual(consumeCalls, [
+        { instanceId: "A2", idempotencyKey: "redeem-a2-once" },
+      ]);
+      assert.deepStrictEqual(refreshCalls, ["A2"]);
+    }).pipe(
+      Effect.provideService(ProviderInstanceRegistry, instanceRegistryFor(instances)),
+      Effect.provideService(
+        ProviderRegistry,
+        providerRegistryWith((instanceId) =>
+          Effect.sync(() => {
+            refreshCalls.push(instanceId);
+            return [];
+          }),
+        ),
       ),
-    ),
-  );
-});
+    );
+  },
+);
 
 it.effect("keeps a successful redemption successful when the follow-up refresh fails", () => {
-  const instances = new Map([
-    [A2, resetInstance({ instanceId: A2, onConsume: () => undefined })],
-  ]);
+  const instances = new Map([[A2, resetInstance({ instanceId: A2, onConsume: () => undefined })]]);
 
   return Effect.gen(function* () {
     const result = yield* consumeProviderRateLimitResetCredit({
@@ -161,6 +163,9 @@ it.effect("rejects an instance that does not expose a reset action", () => {
     assert.strictEqual(error.instanceId, A2);
   }).pipe(
     Effect.provideService(ProviderInstanceRegistry, instanceRegistryFor(instances)),
-    Effect.provideService(ProviderRegistry, providerRegistryWith(() => Effect.succeed([]))),
+    Effect.provideService(
+      ProviderRegistry,
+      providerRegistryWith(() => Effect.succeed([])),
+    ),
   );
 });

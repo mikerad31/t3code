@@ -25,7 +25,10 @@ function formatPercent(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function formatWindowLabel(durationMinutes: number | null | undefined, fallbackIndex: number): string {
+function formatWindowLabel(
+  durationMinutes: number | null | undefined,
+  fallbackIndex: number,
+): string {
   if (durationMinutes === 10_080) return "Weekly";
   if (durationMinutes === 300) return "5h";
 
@@ -42,7 +45,10 @@ function formatWindowLabel(durationMinutes: number | null | undefined, fallbackI
   return `Window ${fallbackIndex}`;
 }
 
-function formatResetDistance(resetsAt: number | null | undefined, nowEpochSeconds: number): string | null {
+function formatResetDistance(
+  resetsAt: number | null | undefined,
+  nowEpochSeconds: number,
+): string | null {
   if (resetsAt === null || resetsAt === undefined || !Number.isFinite(resetsAt)) return null;
 
   const remainingSeconds = Math.max(0, Math.ceil(resetsAt - nowEpochSeconds));

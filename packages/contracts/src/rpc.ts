@@ -509,14 +509,11 @@ export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
  * 40-60% of the listing read that answers everything else on the row, so the rows arrive first
  * and their stats a moment later.
  */
-export const WsPullRequestsListStatsRpc = Rpc.make(
-  WS_METHODS.pullRequestsListStats,
-  {
-    payload: PullRequestListStatsInput,
-    success: PullRequestListStatsResult,
-    error: PullRequestRpcError,
-  },
-);
+export const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
+  payload: PullRequestListStatsInput,
+  success: PullRequestListStatsResult,
+  error: PullRequestRpcError,
+});
 
 export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
   payload: PullRequestRef,
@@ -712,10 +709,7 @@ export const WsProviderConsumeRateLimitResetCreditRpc = Rpc.make(
   {
     payload: ProviderConsumeRateLimitResetCreditInput,
     success: ProviderConsumeRateLimitResetCreditResult,
-    error: Schema.Union([
-      ProviderConsumeRateLimitResetCreditError,
-      EnvironmentAuthorizationError,
-    ]),
+    error: Schema.Union([ProviderConsumeRateLimitResetCreditError, EnvironmentAuthorizationError]),
   },
 );
 

@@ -127,7 +127,9 @@ function CodexLimitProviderCard({
             ) : null}
           </div>
           <div className="truncate text-[11px] text-muted-foreground">
-            {[planLabel, showEnvironment ? entry.environmentLabel : null].filter(Boolean).join(" · ")}
+            {[planLabel, showEnvironment ? entry.environmentLabel : null]
+              .filter(Boolean)
+              .join(" · ")}
           </div>
         </div>
       </div>
@@ -135,7 +137,10 @@ function CodexLimitProviderCard({
       {windows.length > 0 ? (
         <div className="grid gap-3">
           {windows.map((window) => (
-            <CodexLimitWindowRow key={`${window.label}:${window.resetText ?? "none"}`} window={window} />
+            <CodexLimitWindowRow
+              key={`${window.label}:${window.resetText ?? "none"}`}
+              window={window}
+            />
           ))}
         </div>
       ) : (
@@ -147,7 +152,8 @@ function CodexLimitProviderCard({
       {entry.bankedResetCount !== null ? (
         <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-2.5">
           <div className="text-[11px] text-muted-foreground">
-            Banked resets: <span className="font-mono text-foreground/85">{entry.bankedResetCount}</span>
+            Banked resets:{" "}
+            <span className="font-mono text-foreground/85">{entry.bankedResetCount}</span>
           </div>
           {canUseReset ? (
             <Button
@@ -171,7 +177,9 @@ function CodexLimitProviderCard({
       {resetAttempt?.message ? (
         <div
           className={`rounded-md px-2.5 py-2 text-[11px] ${
-            resetAttempt.failed ? "bg-destructive/10 text-destructive" : "bg-muted/40 text-muted-foreground"
+            resetAttempt.failed
+              ? "bg-destructive/10 text-destructive"
+              : "bg-muted/40 text-muted-foreground"
           }`}
         >
           {resetAttempt.message}
@@ -191,7 +199,9 @@ export function SidebarCodexLimitsPopover() {
     { reportFailure: false },
   );
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>({});
+  const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>(
+    {},
+  );
 
   const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {
     const discovered = environments.flatMap((environment) =>

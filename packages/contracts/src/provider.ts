@@ -139,8 +139,7 @@ export const ProviderRateLimitResetCreditOutcome = Schema.Literals([
   "noCredit",
   "alreadyRedeemed",
 ]);
-export type ProviderRateLimitResetCreditOutcome =
-  typeof ProviderRateLimitResetCreditOutcome.Type;
+export type ProviderRateLimitResetCreditOutcome = typeof ProviderRateLimitResetCreditOutcome.Type;
 
 export const ProviderConsumeRateLimitResetCreditInput = Schema.Struct({
   instanceId: ProviderInstanceId,
