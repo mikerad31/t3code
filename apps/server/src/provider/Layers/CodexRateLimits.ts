@@ -11,6 +11,10 @@ export interface CodexRateLimitsLike {
   readonly secondary?: CodexRateLimitWindowLike | null;
 }
 
+export interface CodexRateLimitResetCreditsLike {
+  readonly availableCount: number;
+}
+
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
@@ -73,23 +77,30 @@ function formatWindow(
   }`;
 }
 
+function formatResetCredits(
+  resetCredits: CodexRateLimitResetCreditsLike | null | undefined,
+): string | null {
+  if (!resetCredits || !Number.isFinite(resetCredits.availableCount)) return null;
+  const availableCount = Math.max(0, Math.trunc(resetCredits.availableCount));
+  return `Banked resets: ${availableCount}`;
+}
+
 /**
  * Produce the compact subscription-limit detail rendered under a Codex
  * provider instance. Labels are derived from the server-reported window
  * duration rather than assuming primary/secondary have fixed semantics.
+ * The app-server's `availableCount` is authoritative for banked resets.
  */
 export function formatCodexRateLimitMessage(
   rateLimits: CodexRateLimitsLike | null | undefined,
   nowEpochSeconds = DateTime.toEpochSeconds(DateTime.nowUnsafe()),
+  resetCredits?: CodexRateLimitResetCreditsLike | null,
 ): string | undefined {
-  if (!rateLimits) return undefined;
-
-  const windows = [rateLimits.primary, rateLimits.secondary].filter(
+  const windows = [rateLimits?.primary, rateLimits?.secondary].filter(
     (window): window is CodexRateLimitWindowLike => window !== null && window !== undefined,
   );
-  if (windows.length === 0) return undefined;
-
-  return `Limits — ${windows
-    .map((window, index) => formatWindow(window, index + 1, nowEpochSeconds))
-    .join(" · ")}`;
+  const parts = windows.map((window, index) => formatWindow(window, index + 1, nowEpochSeconds));
+  const resetCreditsText = formatResetCredits(resetCredits);
+  if (resetCreditsText) parts.push(resetCreditsText);
+  return parts.length > 0 ? `Limits — ${parts.join(" · ")}` : undefined;
 }
