@@ -55,13 +55,25 @@ function hasThreadImport(instance: ProviderInstance): instance is ImportCapableP
   return "threadImport" in instance && instance.threadImport !== undefined;
 }
 
-function canonicalCodexInstances(instances: ReadonlyArray<ProviderInstance>) {
+function canonicalCodexInstances(
+  instances: ReadonlyArray<ProviderInstance>,
+  preferredInstanceId: ProviderInstanceId | null | undefined,
+) {
   const byContinuationKey = new Map<string, ImportCapableProviderInstance>();
   for (const instance of instances) {
     if (instance.driverKind !== CODEX_DRIVER || !instance.enabled || !hasThreadImport(instance))
       continue;
     const key = instance.continuationIdentity.continuationKey;
-    if (!byContinuationKey.has(key)) byContinuationKey.set(key, instance);
+    const existing = byContinuationKey.get(key);
+    if (
+      existing === undefined ||
+      (preferredInstanceId !== null &&
+        preferredInstanceId !== undefined &&
+        instance.instanceId === preferredInstanceId &&
+        existing.instanceId !== preferredInstanceId)
+    ) {
+      byContinuationKey.set(key, instance);
+    }
   }
   return [...byContinuationKey.values()];
 }
@@ -204,7 +216,10 @@ export const makeThreadImportService = (input: {
 
   const scanCandidates = (project: OrchestrationProjectShell) =>
     Effect.gen(function* () {
-      const instances = canonicalCodexInstances(yield* providerInstances.listInstances);
+      const instances = canonicalCodexInstances(
+        yield* providerInstances.listInstances,
+        project.defaultModelSelection?.instanceId,
+      );
       if (instances.length === 0) {
         return yield* Effect.fail(
           error("provider-unavailable", "No import-capable Codex provider is configured."),

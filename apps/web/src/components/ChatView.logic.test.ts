@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -18,6 +19,7 @@ import {
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveLockedProvider,
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
@@ -271,6 +273,29 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("deriveLockedProvider", () => {
+  it("resolves a pure imported custom instance to its registered driver kind", () => {
+    const importedInstanceId = ProviderInstanceId.make("codex_a1");
+    const codexDriver = ProviderDriverKind.make("codex");
+
+    expect(
+      deriveLockedProvider({
+        thread: makeThread({
+          modelSelection: {
+            instanceId: importedInstanceId,
+            model: "gpt-5.6-codex",
+          },
+          latestTurn: completedTurn,
+          session: null,
+        }),
+        providers: [{ instanceId: importedInstanceId, driver: codexDriver }],
+        selectedProvider: null,
+        threadProvider: importedInstanceId,
+      }),
+    ).toBe(codexDriver);
+  });
+});
 
 describe("buildLoadingThreadFromShell", () => {
   it("preserves shell metadata and supplies empty detail collections", () => {

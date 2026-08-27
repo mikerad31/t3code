@@ -72,16 +72,23 @@ const sourceTranscript = (
   ...overrides,
 });
 
-function makeProvider(threadImport: ProviderThreadImportShape): ProviderInstance {
+function makeProvider(
+  threadImport: ProviderThreadImportShape,
+  options: {
+    readonly providerInstanceId?: ProviderInstanceId;
+    readonly continuationKey?: string;
+  } = {},
+): ProviderInstance {
   const snapshotValue = {
     models: [{ slug: "gpt-5.6-codex", isDefault: true }],
   } as unknown as ServerProvider;
+  const providerInstanceId = options.providerInstanceId ?? instanceId;
   return {
-    instanceId,
+    instanceId: providerInstanceId,
     driverKind,
     continuationIdentity: {
       driverKind,
-      continuationKey: "codex:test-home",
+      continuationKey: options.continuationKey ?? "codex:test-home",
     },
     displayName: "Codex Test",
     enabled: true,
@@ -102,13 +109,15 @@ function makeHarness(options: {
   readonly scan?: ProviderThreadImportShape["scan"];
   readonly read: ProviderThreadImportShape["read"];
   readonly sessionUpsert?: ProviderSessionDirectory["Service"]["upsert"];
+  readonly providers?: ReadonlyArray<ProviderInstance>;
+  readonly project?: OrchestrationProjectShell;
 }) {
   let importedThread: OrchestrationThreadShell | null = null;
   const commands: OrchestrationCommand[] = [];
   const bindings: ProviderRuntimeBinding[] = [];
 
   const projection = {
-    getProjectShellById: () => Effect.succeed(Option.some(project)),
+    getProjectShellById: () => Effect.succeed(Option.some(options.project ?? project)),
     getSnapshot: () =>
       Effect.succeed({
         threads: importedThread === null ? [] : [importedThread],
@@ -145,7 +154,7 @@ function makeHarness(options: {
   });
   const providerInstances = {
     getInstance: () => Effect.succeed(provider),
-    listInstances: Effect.succeed([provider]),
+    listInstances: Effect.succeed(options.providers ?? [provider]),
     listUnavailable: Effect.succeed([]),
     streamChanges: Stream.empty,
     subscribeChanges: Effect.die("not used by thread import tests"),
@@ -401,6 +410,57 @@ describe("ThreadImportService", () => {
         expect(result.results.map((item) => item.status)).toEqual(["failed", "imported"]);
         expect(result.results[0]?.error).toContain("simulated unreadable transcript");
         expect(harness.commands).toHaveLength(1);
+      }),
+  );
+
+  it.effect(
+    "prefers the project's configured Codex instance when several accounts share one history store",
+    () =>
+      Effect.gen(function* () {
+        const preferredInstanceId = ProviderInstanceId.make("codex-preferred-account");
+        const sharedImport: ProviderThreadImportShape = {
+          scan: () => Effect.succeed([sourceCandidate()]),
+          read: () => Effect.succeed(sourceTranscript()),
+        };
+        const firstProvider = makeProvider(sharedImport, {
+          providerInstanceId: instanceId,
+          continuationKey: "codex:shared-home",
+        });
+        const preferredProvider = makeProvider(sharedImport, {
+          providerInstanceId: preferredInstanceId,
+          continuationKey: "codex:shared-home",
+        });
+        const preferredProject = {
+          ...project,
+          defaultModelSelection: {
+            instanceId: preferredInstanceId,
+            model: "gpt-5.6-codex",
+          },
+        } satisfies OrchestrationProjectShell;
+        const harness = makeHarness({
+          candidates: [sourceCandidate()],
+          read: () => Effect.succeed(sourceTranscript()),
+          providers: [firstProvider, preferredProvider],
+          project: preferredProject,
+        });
+
+        const scan = yield* harness.service.scan({ projectId });
+        expect(scan.candidates).toHaveLength(1);
+        expect(scan.candidates[0]?.providerInstanceId).toBe(preferredInstanceId);
+
+        const candidateId = scan.candidates[0]!.candidateId;
+        const commit = yield* harness.service.commit({
+          projectId,
+          candidateIds: [candidateId],
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+        expect(commit.results[0]?.status).toBe("imported");
+        expect(harness.bindings[0]?.providerInstanceId).toBe(preferredInstanceId);
+        expect(harness.commands[0]?.type).toBe("thread.import");
+        if (harness.commands[0]?.type === "thread.import") {
+          expect(harness.commands[0].modelSelection.instanceId).toBe(preferredInstanceId);
+        }
       }),
   );
 });
