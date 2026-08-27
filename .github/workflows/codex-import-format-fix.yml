@@ -313,7 +313,7 @@ jobs:
           run-install: true
       - name: Format touched files
         run: >-
-          vp exec oxfmt
+          vp fmt
           apps/server/src/provider/Layers/CodexThreadImport.ts
           apps/server/src/threadImport/ThreadImportService.test.ts
       - name: Guard patch scope
