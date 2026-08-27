@@ -13,6 +13,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
@@ -29,6 +30,15 @@ const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_
   Atom.withLabel("web-environment-thread:empty"),
 );
 
+function resolveEnvironmentThreadState(
+  result: ReturnType<typeof appAtomRegistry.get<typeof EMPTY_THREAD_STATE_ATOM>>,
+): EnvironmentThreadState {
+  return Option.getOrElse(
+    AsyncResult.value(result),
+    () => EMPTY_ENVIRONMENT_THREAD_STATE,
+  ) as EnvironmentThreadState;
+}
+
 export function useEnvironmentThread(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
@@ -38,8 +48,14 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  return Option.getOrElse(
-    AsyncResult.value(result),
-    () => EMPTY_ENVIRONMENT_THREAD_STATE,
-  ) as EnvironmentThreadState;
+  return resolveEnvironmentThreadState(result);
+}
+
+export function readEnvironmentThread(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): EnvironmentThreadState {
+  return resolveEnvironmentThreadState(
+    appAtomRegistry.get(environmentThreads.stateAtom(environmentId, threadId)),
+  );
 }
