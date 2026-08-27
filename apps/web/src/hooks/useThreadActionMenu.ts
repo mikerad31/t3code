@@ -31,6 +31,13 @@ import {
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
+import { downloadTextFile, loadCompleteThread } from "../threadInspection";
+import { publishThreadDisclosureCommand } from "../threadInspectionBus";
+import {
+  formatThreadJson,
+  formatThreadMarkdown,
+  threadExportBaseName,
+} from "../threadExport.logic";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
@@ -104,6 +111,13 @@ export function useThreadActionMenu(input: {
     },
     onError: (error) => failureToast("Failed to copy thread ID", error),
   });
+  const { copyToClipboard: copyFullThreadToClipboard } = useCopyToClipboard<{ title: string }>({
+    target: "thread",
+    onCopy: ({ title }) => {
+      toastManager.add({ type: "success", title: "Full thread copied", description: title });
+    },
+    onError: (error) => failureToast("Failed to copy full thread", error),
+  });
 
   const openMenu = useCallback(
     (position: { x: number; y: number }) => {
@@ -142,6 +156,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
+          chatInspection: true,
           supports,
           snoozePresets,
         });
@@ -149,7 +164,7 @@ export function useThreadActionMenu(input: {
         if (clicked._tag === "Failure" || clicked.value === null) return;
         const action: ThreadActionMenuId = clicked.value;
         if (action.startsWith("snooze:")) {
-          const preset = snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
+          const preset = snoozePresets.find((candidate) => `snooze:${preset.id}` === action);
           if (!preset) return;
           const result = await snoozeThread(threadRef, preset.snoozedUntil);
           if (result._tag === "Failure") {
@@ -256,6 +271,47 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "expand-all":
+          case "collapse-all":
+            publishThreadDisclosureCommand(scopedThreadKey(threadRef), action);
+            return;
+          case "copy-full-thread": {
+            try {
+              const completeThread = await loadCompleteThread(threadRef);
+              copyFullThreadToClipboard(formatThreadMarkdown(completeThread), {
+                title: completeThread.title,
+              });
+            } catch (error) {
+              failureToast("Failed to copy full thread", error);
+            }
+            return;
+          }
+          case "export-thread-markdown": {
+            try {
+              const completeThread = await loadCompleteThread(threadRef);
+              downloadTextFile({
+                filename: `${threadExportBaseName(completeThread)}.md`,
+                text: formatThreadMarkdown(completeThread),
+                mimeType: "text/markdown;charset=utf-8",
+              });
+            } catch (error) {
+              failureToast("Failed to export Markdown", error);
+            }
+            return;
+          }
+          case "export-thread-json": {
+            try {
+              const completeThread = await loadCompleteThread(threadRef);
+              downloadTextFile({
+                filename: `${threadExportBaseName(completeThread)}.json`,
+                text: formatThreadJson(completeThread),
+                mimeType: "application/json;charset=utf-8",
+              });
+            } catch (error) {
+              failureToast("Failed to export JSON", error);
+            }
+            return;
+          }
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -316,6 +372,7 @@ export function useThreadActionMenu(input: {
       confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
+      copyFullThreadToClipboard,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
