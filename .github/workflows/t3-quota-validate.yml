@@ -1,0 +1,26 @@
+name: T3 quota feature validation
+
+on:
+  push:
+    branches: [feat/codex-quota-dashboard]
+    paths: [.github/workflows/t3-quota-validate.yml]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Check formatting and lint
+        run: vp check
+      - name: Typecheck
+        run: vpr typecheck
+      - name: Test quota and reset domain
+        working-directory: apps/server
+        run: vp test run src/provider/Layers/CodexRateLimits.test.ts src/provider/consumeRateLimitResetCredit.test.ts
