@@ -27,6 +27,7 @@ import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/co
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import { formatCodexRateLimitMessage } from "./CodexRateLimits.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -37,6 +38,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_RATE_LIMIT_PROBE_TIMEOUT = Duration.seconds(3);
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
@@ -48,6 +50,7 @@ export interface CodexAppServerProviderSnapshot {
   readonly version: string | undefined;
   readonly models: ReadonlyArray<ServerProviderModel>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
+  readonly rateLimits?: CodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] | null;
 }
 
 const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
@@ -386,15 +389,27 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       version,
       models: appendCustomCodexModels([], input.customModels ?? []),
       skills: [],
+      rateLimits: null,
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
+  const rateLimitsRequest =
+    accountResponse.account?.type === "chatgpt"
+      ? client.request("account/rateLimits/read", undefined).pipe(
+          Effect.map((response) => response.rateLimits),
+          Effect.timeoutOption(CODEX_RATE_LIMIT_PROBE_TIMEOUT),
+          Effect.map(Option.getOrNull),
+          Effect.orElseSucceed(() => null),
+        )
+      : Effect.succeed(null);
+
+  const [skillsResponse, models, rateLimits] = yield* Effect.all(
     [
       client.request("skills/list", {
         cwds: [input.cwd],
       }),
       requestAllCodexModels(client),
+      rateLimitsRequest,
     ],
     { concurrency: "unbounded" },
   );
@@ -406,6 +421,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
       appendCustomCodexModels(models, input.customModels ?? []),
     ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
+    rateLimits,
   } satisfies CodexAppServerProviderSnapshot;
 });
 
@@ -588,6 +604,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   const snapshot = probeResult.success.value;
   const accountStatus = accountProbeStatus(snapshot.account);
+  const rateLimitMessage = formatCodexRateLimitMessage(snapshot.rateLimits);
+  const providerMessage = accountStatus.message ?? rateLimitMessage;
 
   return buildServerProvider({
     presentation: CODEX_PRESENTATION,
@@ -607,7 +625,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       version: snapshot.version ?? null,
       status: accountStatus.status,
       auth: accountStatus.auth,
-      ...(accountStatus.message ? { message: accountStatus.message } : {}),
+      ...(providerMessage ? { message: providerMessage } : {}),
     },
   });
 });
