@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseCodexBankedResetCount,
   parseCodexLimitMessage,
   resolveCodexAccountLabel,
 } from "./SidebarCodexLimitsPopover.logic.ts";
@@ -34,6 +35,25 @@ describe("parseCodexLimitMessage", () => {
   it("ignores non-limit provider messages", () => {
     expect(parseCodexLimitMessage(undefined)).toEqual([]);
     expect(parseCodexLimitMessage("Codex is not authenticated.")).toEqual([]);
+  });
+});
+
+describe("parseCodexBankedResetCount", () => {
+  it("parses positive and zero banked reset counts", () => {
+    expect(
+      parseCodexBankedResetCount(
+        "Limits — 5h: 99% left · Weekly: 51% left · Banked resets: 2",
+      ),
+    ).toBe(2);
+    expect(parseCodexBankedResetCount("Limits — Banked resets: 0")).toBe(0);
+  });
+
+  it("returns null when a count is missing, malformed, or outside the safe integer range", () => {
+    expect(parseCodexBankedResetCount(undefined)).toBeNull();
+    expect(parseCodexBankedResetCount("Codex is not authenticated.")).toBeNull();
+    expect(parseCodexBankedResetCount("Limits — Banked resets: -1")).toBeNull();
+    expect(parseCodexBankedResetCount("Limits — Banked resets: nope")).toBeNull();
+    expect(parseCodexBankedResetCount("Limits — Banked resets: 999999999999999999999")).toBeNull();
   });
 });
 
