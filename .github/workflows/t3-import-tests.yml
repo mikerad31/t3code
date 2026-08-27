@@ -1,0 +1,26 @@
+name: T3 importer service invariants
+
+on:
+  push:
+    branches:
+      - feat/codex-thread-import
+    paths:
+      - .github/workflows/t3-import-tests.yml
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Server typecheck
+        working-directory: apps/server
+        run: vp run typecheck
+      - name: Thread import service tests
+        run: vp test run apps/server/src/threadImport/ThreadImportService.test.ts
