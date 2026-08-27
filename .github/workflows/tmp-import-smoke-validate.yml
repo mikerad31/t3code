@@ -31,6 +31,9 @@ jobs:
           python scripts/tmp-import-smoke-fixes.py
           python scripts/tmp-import-provider-lock-fix.py
 
+      - name: Apply repository formatting
+        run: vp check --fix
+
       - name: Repository conformance
         run: vp check
 
