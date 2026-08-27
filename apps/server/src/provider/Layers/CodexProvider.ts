@@ -176,11 +176,17 @@ export function mapCodexModelCapabilities(
     });
   }
 
-  return createModelCapabilities({ optionDescriptors });
+  return createModelCapabilities({
+    optionDescriptors,
+  });
 }
 
-const toDisplayName = (model: CodexSchema.V2ModelListResponse__Model): string =>
-  model.displayName.replace(/^gpt/i, "GPT").replace(/-([a-z])/g, (_, c) => "-" + c.toUpperCase());
+const toDisplayName = (model: CodexSchema.V2ModelListResponse__Model): string => {
+  // Capitalize 'gpt' to 'GPT-' and capitalize any letter following a dash
+  return model.displayName
+    .replace(/^gpt/i, "GPT") // Handle start with 'gpt' or 'GPT'
+    .replace(/-([a-z])/g, (_, c) => "-" + c.toUpperCase());
+};
 
 function parseCodexModelListResponse(
   response: CodexSchema.V2ModelListResponse,
@@ -194,17 +200,26 @@ function parseCodexModelListResponse(
   }));
 }
 
+/**
+ * Prefer our own default-model ranking when one of the preferred slugs is in
+ * the live catalog; otherwise keep whatever Codex itself flagged as default.
+ */
 export function applyPreferredCodexDefaultModel(
   models: ReadonlyArray<ServerProviderModel>,
 ): ReadonlyArray<ServerProviderModel> {
   const preferredSlug = PREFERRED_DEFAULT_CODEX_MODELS.find((slug) =>
     models.some((model) => model.slug === slug && !model.isCustom),
   );
-  if (!preferredSlug) return models;
+  if (!preferredSlug) {
+    return models;
+  }
   return models.map((model) => {
-    if (model.slug === preferredSlug)
+    if (model.slug === preferredSlug) {
       return model.isDefault ? model : { ...model, isDefault: true };
-    if (!model.isDefault) return model;
+    }
+    if (!model.isDefault) {
+      return model;
+    }
     const { isDefault: _isDefault, ...rest } = model;
     return rest;
   });
@@ -214,15 +229,25 @@ function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
-  if (customModels.length === 0) return models;
+  if (customModels.length === 0) {
+    return models;
+  }
+
   const seen = new Set(models.map((model) => model.slug));
   const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
   for (const rawModel of customModels) {
     const slug = rawModel.trim();
-    if (!slug || seen.has(slug)) continue;
+    if (!slug || seen.has(slug)) {
+      continue;
+    }
     seen.add(slug);
-    customEntries.push({ slug, name: slug, isCustom: true, capabilities: fallbackCapabilities });
+    customEntries.push({
+      slug,
+      name: slug,
+      isCustom: true,
+      capabilities: fallbackCapabilities,
+    });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
 }
@@ -239,15 +264,26 @@ function parseCodexSkillsListResponse(
   return skills.map((skill) => {
     const shortDescription =
       skill.shortDescription ?? skill.interface?.shortDescription ?? undefined;
+
     const parsedSkill: Types.Mutable<ServerProviderSkill> = {
       name: skill.name,
       path: skill.path,
       enabled: skill.enabled,
     };
-    if (skill.description) parsedSkill.description = skill.description;
-    if (skill.scope) parsedSkill.scope = skill.scope;
-    if (skill.interface?.displayName) parsedSkill.displayName = skill.interface.displayName;
-    if (shortDescription) parsedSkill.shortDescription = shortDescription;
+
+    if (skill.description) {
+      parsedSkill.description = skill.description;
+    }
+    if (skill.scope) {
+      parsedSkill.scope = skill.scope;
+    }
+    if (skill.interface?.displayName) {
+      parsedSkill.displayName = skill.interface.displayName;
+    }
+    if (shortDescription) {
+      parsedSkill.shortDescription = shortDescription;
+    }
+
     return parsedSkill;
   });
 }
@@ -257,6 +293,7 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
 ) {
   const models: ServerProviderModel[] = [];
   let cursor: string | null | undefined = undefined;
+
   do {
     const response: CodexSchema.V2ModelListResponse = yield* client.request(
       "model/list",
@@ -265,13 +302,20 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
     models.push(...parseCodexModelListResponse(response));
     cursor = response.nextCursor;
   } while (cursor);
+
   return models;
 });
 
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
-    clientInfo: { name: "t3code_desktop", title: "T3 Code Desktop", version: packageJson.version },
-    capabilities: { experimentalApi: true },
+    clientInfo: {
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: packageJson.version,
+    },
+    capabilities: {
+      experimentalApi: true,
+    },
   };
 }
 
@@ -283,6 +327,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly customModels?: ReadonlyArray<string>;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
+  // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
+  // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
+  // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
+  // Expand here for parity with `CodexTextGeneration`/`CodexSessionRuntime`.
   const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = {
@@ -321,8 +369,19 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     Effect.provide(clientContext),
   );
 
-  const initialize = yield* client.request("initialize", buildCodexInitializeParams());
+  const initialize = yield* client.request("initialize", {
+    clientInfo: {
+      name: "t3code_desktop",
+      title: "T3 Code Desktop",
+      version: "0.1.0",
+    },
+    capabilities: {
+      experimentalApi: true,
+    },
+  });
   yield* client.notify("initialized", undefined);
+
+  // Extract the version string after the first '/' in userAgent, up to the next space or the end
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
   const version = versionMatch ? versionMatch[1] : undefined;
 
@@ -349,7 +408,9 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   const [skillsResponse, models, rateLimitsResponse] = yield* Effect.all(
     [
-      client.request("skills/list", { cwds: [input.cwd] }),
+      client.request("skills/list", {
+        cwds: [input.cwd],
+      }),
       requestAllCodexModels(client),
       rateLimitsRequest,
     ],
@@ -372,7 +433,9 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
   const models = new Set<string>();
   for (const model of codexSettings.customModels) {
     const trimmed = model.trim();
-    if (trimmed.length > 0) models.add(trimmed);
+    if (trimmed.length > 0) {
+      models.add(trimmed);
+    }
   }
   return Array.from(models, (model) => ({
     slug: model,
@@ -388,6 +451,7 @@ const makePendingCodexProvider = (
   Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
     const models = emptyCodexModelsFromSettings(codexSettings);
+
     if (!codexSettings.enabled) {
       return buildServerProvider({
         presentation: CODEX_PRESENTATION,
@@ -404,6 +468,7 @@ const makePendingCodexProvider = (
         },
       });
     }
+
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
       enabled: true,
@@ -429,11 +494,15 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   const authEmail = codexAccountEmail(account.account);
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
-    ...(account.account?.type ? { type: account.account.type } : {}),
+    ...(account.account?.type ? { type: account.account?.type } : {}),
     ...(authLabel ? { label: authLabel } : {}),
     ...(authEmail ? { email: authEmail } : {}),
   } satisfies ServerProvider["auth"];
-  if (account.account) return { status: "ready", auth };
+
+  if (account.account) {
+    return { status: "ready", auth };
+  }
+
   if (account.requiresOpenaiAuth) {
     return {
       status: "error",
@@ -441,6 +510,7 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
       message: "Codex CLI is not authenticated. Run `codex login` and try again.",
     };
   }
+
   return { status: "ready", auth };
 }
 
@@ -568,4 +638,11 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   });
 });
 
+// NOTE: the singleton `CodexProviderLive` Layer has been removed as part of
+// the per-instance-driver refactor. `CodexDriver.create()` builds a managed
+// snapshot per instance (each with its own `CodexSettings`) and hands the
+// resulting `ServerProviderShape` back as `ProviderInstance.snapshot`.
+//
+// The `makePendingCodexProvider` and `checkCodexProviderStatus` helpers are
+// re-exported for use by `CodexDriver`.
 export { makePendingCodexProvider };

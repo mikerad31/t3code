@@ -69,6 +69,11 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   nativeUpdate: null,
 });
 
+/**
+ * Services the driver needs to materialize an instance. Surfaced as the
+ * driver's `R` so the registry layer aggregates these across every
+ * registered driver and the runtime satisfies them once.
+ */
 export type CodexDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
@@ -81,6 +86,12 @@ export type CodexDriverEnv =
   | ServerConfig
   | ServerSettingsService;
 
+/**
+ * Stamp instance identity onto a `ServerProvider` snapshot produced by the
+ * driver-kind-only codex helpers. Once `buildServerProvider` in
+ * `providerSnapshot.ts` is widened to accept `instanceId`/`driver`, this
+ * wrapper disappears.
+ */
 const withInstanceIdentity =
   (input: {
     readonly instanceId: ProviderInstance["instanceId"];
@@ -142,6 +153,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         env: processEnv,
       });
 
+      // `makeCodexAdapter` and `makeCodexTextGeneration` have `never` error
+      // channels at construction time — their failure modes are all on the
+      // per-operation closures they return. No `mapError` wrapper is needed
+      // here; the registry only has to worry about snapshot-build and
+      // spawner-availability failures surfaced from `checkCodexProviderStatus`
+      // below.
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
@@ -149,6 +166,13 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       });
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
 
+      // Build a managed snapshot whose settings never change — mutations come
+      // in as instance rebuilds from the registry rather than in-place
+      // updates. Pre-provide `ChildProcessSpawner` so the check fits
+      // `makeManagedServerProvider.checkProvider`'s `R = never`.
+      // Kick the TTL-gated manifest refresh in the background and classify
+      // with the in-memory manifest, so a slow or hung fetch never delays the
+      // provider check. A refresh that lands mid-probe applies on the next one.
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
           Effect.zipWith(

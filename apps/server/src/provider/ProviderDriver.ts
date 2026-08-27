@@ -2,10 +2,10 @@
  * ProviderDriver / ProviderInstance — driver SPI as plain values.
  *
  * `ProviderDriver` is a record, not a Context.Service. The thing it produces
- * (`ProviderInstance`) is also a record — captured closures owned by that
- * instance, an id, and a driver kind. There are intentionally no per-driver
- * Context tags because tags are singleton-per-runtime and we need many
- * instances of the same driver.
+ * (`ProviderInstance`) is also a record — three captured closures
+ * (`snapshot`, `adapter`, `textGeneration`), an id, and a driver kind. There
+ * are intentionally no per-driver Context tags because tags are
+ * singleton-per-runtime and we need many instances of the same driver.
  *
  * The only Effect service involved is `ProviderInstanceRegistry`, which
  * owns the live `Map<InstanceId, ProviderInstance>` and is itself a
@@ -17,7 +17,7 @@
  *   - `env` flows through Effect's R channel. Each driver declares the
  *     subset of infrastructure services it needs (FileSystem,
  *     ChildProcessSpawner, …) on its `create` return type; the registry
- *     layer's R is the union of those, and the runtime satisfies them once.
+ *     layer's R is the union of those, and the runtime layer satisfies it.
  *
  * @module provider/ProviderDriver
  */
@@ -69,9 +69,10 @@ export interface ProviderAccountActions {
  * One materialized provider instance. Held by the registry, looked up by
  * `instanceId`, torn down by closing the scope it was created in.
  *
- * The runtime fields are captured closures owned by this instance — stopping
- * one instance cannot affect another, and starting a second instance of the
- * same driver does not reach into the first instance's state.
+ * The three "shape" fields are captured closures owned by this instance —
+ * stopping one instance cannot affect another, and starting a second
+ * instance of the same driver does not reach into the first instance's
+ * state.
  */
 export interface ProviderInstance {
   readonly instanceId: ProviderInstanceId;
@@ -103,7 +104,9 @@ export function defaultProviderContinuationIdentity(input: {
 
 /**
  * Inputs the registry passes to a driver's `create` function.
- * `config` is already decoded by the registry through `configSchema`.
+ *
+ * `config` is the typed payload — already decoded by the registry through
+ * `driver.configSchema`. Drivers never decode their own raw envelope.
  */
 export interface ProviderDriverCreateInput<Config> {
   readonly instanceId: ProviderInstanceId;
@@ -116,6 +119,16 @@ export interface ProviderDriverCreateInput<Config> {
 
 /**
  * Driver SPI — registered as a plain value, not a Layer.
+ *
+ * `Config` is whatever the driver decoded from
+ * `ProviderInstanceConfig.config`. `R` is the union of infrastructure
+ * services the driver depends on; the registry layer aggregates `R` across
+ * all registered drivers and the runtime supplies them.
+ *
+ * `create` is responsible for *all* per-instance state — process handles,
+ * pubsub topics, refs, file watchers — and must release them when its
+ * scope closes. Two calls to `create` with different `instanceId` /
+ * `config` MUST yield instances with no shared mutable state.
  */
 export interface ProviderDriver<Config, R = never> {
   readonly driverKind: ProviderDriverKind;
@@ -126,25 +139,45 @@ export interface ProviderDriver<Config, R = never> {
    * failure is surfaced as `ProviderDriverError` and downgraded to an
    * unavailable shadow snapshot.
    *
+   * The `Encoded` parameter is intentionally left as `unknown` (not
+   * `Config`) so schemas with `withDecodingDefault` / transformations — where
+   * the encoded shape differs from the decoded shape — satisfy the SPI
+   * without casts. The registry only ever decodes `unknown` envelopes here,
+   * so the precise encoded type is irrelevant at this boundary.
+   *
    * Using `Codec` rather than `Schema` pins `DecodingServices = never` — if
    * we used `Schema<Config>`, the erased `any` in `AnyProviderDriver` would
    * widen `DecodingServices` to `unknown` and poison the R channel of every
    * caller of `decodeUnknownEffect`.
    */
   readonly configSchema: Schema.Codec<Config, unknown>;
-  /** Default typed config for bootstrap / legacy migration paths. */
+  /**
+   * Default config payload used when the legacy
+   * `ServerSettings.providers.<kind>` entry is empty or when the driver
+   * is auto-bootstrapped without user configuration. Returning a typed
+   * default keeps the migration path simple — no special-casing needed
+   * to construct a "blank" instance.
+   */
   readonly defaultConfig: () => Config;
   /**
-   * Materialize one instance. The returned effect runs in a scope owned by
-   * the registry; closing that scope releases every resource the driver
-   * opened. Failures become unavailable shadow snapshots.
+   * Materialize one instance. The returned effect runs in a scope owned
+   * by the registry; closing that scope releases every resource the
+   * driver opened. Failures become unavailable shadow snapshots — the
+   * driver MUST NOT throw defects.
    */
   readonly create: (
     input: ProviderDriverCreateInput<Config>,
   ) => Effect.Effect<ProviderInstance, ProviderDriverError, R | Scope.Scope>;
 }
 
-/** Heterogeneous-array convenience for registered drivers. */
-// `any` intentionally erases each driver's Config after the registry has
-// decoded it. `unknown` would make concrete create() inputs unassignable.
+/**
+ * Heterogeneous-array convenience: the registry stores drivers as
+ * `ReadonlyArray<AnyProviderDriver<R>>` where `R` is the union of all
+ * registered drivers' env requirements.
+ */
+// `any` here intentionally erases the per-driver Config; the registry
+// already decoded it before invoking `create`, so downstream code never
+// needs the original `Config` type. Using `unknown` instead would force
+// `create` callers into casts since `unknown` is not assignable to a
+// concrete `Config` from inside the driver body.
 export type AnyProviderDriver<R = never> = ProviderDriver<any, R>;
