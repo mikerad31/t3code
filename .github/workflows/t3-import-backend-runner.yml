@@ -60,12 +60,12 @@ jobs:
           cache: true
           run-install: true
       - name: Capture typecheck diagnostics
-        run: vpr typecheck > .t3-import-backend-typecheck.log 2>&1 || true
+        run: vpr typecheck > .t3-import-backend-typecheck.txt 2>&1 || true
       - name: Commit backend slice and diagnostics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add packages/contracts/src/orchestration.ts apps/server/src/orchestration/decider.ts apps/server/src/threadImport/ThreadImportService.ts .t3-import-backend-typecheck.log
+          git add packages/contracts/src/orchestration.ts apps/server/src/orchestration/decider.ts apps/server/src/threadImport/ThreadImportService.ts .t3-import-backend-typecheck.txt
           git diff --cached --stat
           git commit -m "feat(import): persist historical Codex threads through orchestration"
           git push origin HEAD:feat/codex-thread-import
