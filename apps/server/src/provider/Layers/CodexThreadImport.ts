@@ -126,7 +126,7 @@ function extractTranscript(
 export function makeCodexThreadImport(input: {
   readonly config: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
-  readonly spawner: ChildProcessSpawner.ChildProcessSpawner;
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
 }): ProviderThreadImportShape {
   const resolvedHomePath = input.config.homePath ? expandHomePath(input.config.homePath) : undefined;
   const launchArgs = resolveCodexLaunchArgs(input.config.launchArgs, input.environment);
@@ -135,8 +135,10 @@ export function makeCodexThreadImport(input: {
     ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
   };
 
-  const withClient = <A>(
-    operation: (client: CodexClient.CodexAppServerClient["Service"]) => Effect.Effect<A, unknown>,
+  const withClient = <A, E>(
+    operation: (
+      client: CodexClient.CodexAppServerClient["Service"],
+    ) => Effect.Effect<A, E, never>,
     importOperation: "scan" | "read",
   ): Effect.Effect<A, ProviderThreadImportError> =>
     Effect.gen(function* () {
@@ -163,13 +165,14 @@ export function makeCodexThreadImport(input: {
       return yield* operation(client);
     }).pipe(
       Effect.scoped,
-      Effect.mapError(
-        (cause) =>
-          new ProviderThreadImportError({
-            operation: importOperation,
-            detail: `Codex app-server thread ${importOperation} failed.`,
-            cause,
-          }),
+      Effect.mapError((cause) =>
+        cause instanceof ProviderThreadImportError
+          ? cause
+          : new ProviderThreadImportError({
+              operation: importOperation,
+              detail: `Codex app-server thread ${importOperation} failed.`,
+              cause,
+            }),
       ),
     );
 
@@ -180,9 +183,9 @@ export function makeCodexThreadImport(input: {
   ) =>
     Effect.gen(function* () {
       const candidates: ProviderThreadImportCandidate[] = [];
-      let cursor: string | null | undefined = undefined;
+      let cursor: string | null = null;
       do {
-        const response = yield* client.request("thread/list", {
+        const response: CodexSchema.V2ThreadListResponse = yield* client.request("thread/list", {
           cursor,
           limit: THREAD_LIST_PAGE_SIZE,
           sortKey: "updated_at",
@@ -228,9 +231,10 @@ export function makeCodexThreadImport(input: {
               Effect.flatMap((response) => {
                 if (normalizePath(String(response.thread.cwd)) !== normalizePath(projectRoot)) {
                   return Effect.fail(
-                    new Error(
-                      `Codex thread '${externalThreadId}' no longer belongs to '${projectRoot}'.`,
-                    ),
+                    new ProviderThreadImportError({
+                      operation: "read",
+                      detail: `Codex thread '${externalThreadId}' no longer belongs to '${projectRoot}'.`,
+                    }),
                   );
                 }
                 return Effect.succeed(extractTranscript(response.thread, archived));
