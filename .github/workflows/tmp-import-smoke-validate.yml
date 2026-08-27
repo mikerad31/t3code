@@ -8,7 +8,7 @@ on:
       - .github/workflows/tmp-import-smoke-validate.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -52,22 +52,31 @@ jobs:
           git diff --check
           git status --short
 
-      - name: Stage validated files
+      - name: Create validated Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p /tmp/import-fix/apps/server/src/threadImport
-          mkdir -p /tmp/import-fix/apps/server/src/orchestration
-          mkdir -p /tmp/import-fix/apps/web/src/components
-          cp apps/server/src/threadImport/ThreadImportService.ts /tmp/import-fix/apps/server/src/threadImport/
-          cp apps/server/src/threadImport/ThreadImportService.test.ts /tmp/import-fix/apps/server/src/threadImport/
-          cp apps/server/src/orchestration/decider.ts /tmp/import-fix/apps/server/src/orchestration/
-          cp apps/server/src/orchestration/decider.threadImport.test.ts /tmp/import-fix/apps/server/src/orchestration/
-          cp apps/web/src/components/ChatView.logic.ts /tmp/import-fix/apps/web/src/components/
-          cp apps/web/src/components/ChatView.logic.test.ts /tmp/import-fix/apps/web/src/components/
-          cp apps/web/src/components/ChatView.tsx /tmp/import-fix/apps/web/src/components/
+          set -euo pipefail
+          files=(
+            apps/server/src/threadImport/ThreadImportService.ts
+            apps/server/src/threadImport/ThreadImportService.test.ts
+            apps/server/src/orchestration/decider.ts
+            apps/server/src/orchestration/decider.threadImport.test.ts
+            apps/web/src/components/ChatView.logic.ts
+            apps/web/src/components/ChatView.logic.test.ts
+            apps/web/src/components/ChatView.tsx
+          )
+          : > /tmp/blob-shas.txt
+          for file in "${files[@]}"; do
+            payload="$(base64 -w0 "$file")"
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST -f content="$payload" -f encoding=base64 --jq .sha)"
+            printf '%s\t%s\n' "$sha" "$file" >> /tmp/blob-shas.txt
+          done
+          cat /tmp/blob-shas.txt
 
-      - name: Upload validated files
+      - name: Upload blob manifest
         uses: actions/upload-artifact@v7
         with:
-          name: importer-smoke-fix-files
-          path: /tmp/import-fix
+          name: importer-smoke-fix-blobs
+          path: /tmp/blob-shas.txt
           retention-days: 1
