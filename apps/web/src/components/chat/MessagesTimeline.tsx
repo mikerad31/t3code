@@ -43,6 +43,7 @@ import {
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../../lib/diffRendering";
+import { subscribeThreadDisclosureCommands } from "../../threadInspectionBus";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -311,7 +312,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, []);
 
-  const suspendEndScrollMaintenanceForDisclosure = useCallback((anchorKey: string) => {
+  const suspendEndScrollMaintenanceForDisclosure = useCallback((anchorKey: string | null) => {
     disclosureAnchorKeyRef.current = anchorKey;
     setDisclosureToggleSettling(true);
     if (disclosureSettleFrameRef.current !== null) {
@@ -373,6 +374,66 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       });
     },
     [suspendEndScrollMaintenanceForDisclosure],
+  );
+
+  useEffect(
+    () =>
+      subscribeThreadDisclosureCommands(routeThreadKey, (command) => {
+        suspendEndScrollMaintenanceForDisclosure(null);
+        if (command === "collapse-all") {
+          setExpandedTurnIds(new Set());
+          setExpandedWorkGroupIds(new Set());
+          return;
+        }
+
+        const collapsedRows = deriveMessagesTimelineRows({
+          timelineEntries,
+          latestTurn,
+          runningTurnId,
+          expandedTurnIds: new Set<TurnId>(),
+          expandedWorkGroupIds: new Set<string>(),
+          isWorking,
+          activeTurnStartedAt,
+          turnDiffSummaryByAssistantMessageId,
+          revertTurnCountByUserMessageId,
+        });
+        const allTurnIds = new Set<TurnId>();
+        for (const row of collapsedRows) {
+          if (row.kind === "turn-fold") allTurnIds.add(row.turnId);
+        }
+
+        const turnExpandedRows = deriveMessagesTimelineRows({
+          timelineEntries,
+          latestTurn,
+          runningTurnId,
+          expandedTurnIds: allTurnIds,
+          expandedWorkGroupIds: new Set<string>(),
+          isWorking,
+          activeTurnStartedAt,
+          turnDiffSummaryByAssistantMessageId,
+          revertTurnCountByUserMessageId,
+        });
+        const allWorkGroupIds = new Set<string>();
+        for (const row of turnExpandedRows) {
+          if (row.kind === "work-toggle" || row.kind === "work-live") {
+            allWorkGroupIds.add(row.groupId);
+          }
+        }
+
+        setExpandedTurnIds(allTurnIds);
+        setExpandedWorkGroupIds(allWorkGroupIds);
+      }),
+    [
+      activeTurnStartedAt,
+      isWorking,
+      latestTurn,
+      revertTurnCountByUserMessageId,
+      routeThreadKey,
+      runningTurnId,
+      suspendEndScrollMaintenanceForDisclosure,
+      timelineEntries,
+      turnDiffSummaryByAssistantMessageId,
+    ],
   );
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
@@ -802,8 +863,6 @@ function TimelineMinimap({
           aria-label={`Jump to message: ${activeItem?.userText ?? "User message"}`}
           className={cn(
             "absolute top-1/2 left-3 -translate-y-1/2 cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
-            // The strip is width-capped to the side gutter so it never overlays
-            // the centered content column; with no usable gutter it goes inert.
             hitStripWidth > 0 ? "pointer-events-auto" : "pointer-events-none",
           )}
           onBlur={() => setActiveIndex(null)}
@@ -939,8 +998,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   return (
     <div
       className={cn(
-        // Commentary (non-terminal assistant) rows carry no metadata row, so
-        // they sit closer to the work that follows them.
         isExpandedToolGroupEntry
           ? isLastExpandedToolGroupEntry
             ? "pb-1"
@@ -1211,11 +1268,6 @@ function ProposedPlanTimelineRow({
   );
 }
 
-/**
- * Inline folded plan chip: one row per turn that produced plan/todo steps.
- * Collapsed by default — a segment bar plus the in-progress step label —
- * and expands in place to the full step list. Replaces the old plan sidebar.
- */
 const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
   row,
 }: {
@@ -1225,8 +1277,6 @@ const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
   const { steps } = row.turnPlan.plan;
   const completedCount = steps.filter((step) => step.status === "completed").length;
   const allDone = completedCount === steps.length;
-  // Label priority: the in-progress step, else the next pending step (plan
-  // just created), else the last step (plan finished, rendered muted).
   const label =
     steps.find((step) => step.status === "inProgress")?.step ??
     steps.find((step) => step.status === "pending")?.step ??
@@ -1338,12 +1388,6 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   );
 }
 
-// ---------------------------------------------------------------------------
-// Self-ticking labels — update their own text nodes so elapsed-time display
-// does not create a React commit every second while a response is streaming.
-// ---------------------------------------------------------------------------
-
-/** Live "Working for Xs" label. */
 function WorkingTimer({ createdAt }: { createdAt: string }) {
   const textRef = useRef<HTMLSpanElement>(null);
   const initialText = formatWorkingTimerNow(createdAt);
@@ -1366,12 +1410,6 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Extracted row sections — own their state / store subscriptions so changes
-// re-render only the affected row, not the entire list.
-// ---------------------------------------------------------------------------
-
-/** Renders one or more already-derived work log rows. Overflow expansion is modeled as LegendList data. */
 const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries,
   isExpandedToolGroupEntry,
@@ -1621,8 +1659,6 @@ function WorkGroupToggleTimelineRow({
   );
 }
 
-/** Subscribes directly to the UI state store for expand/collapse state,
- *  so toggling re-renders only this component — not the entire list. */
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
   turnSummary,
   routeThreadKey,
@@ -1649,8 +1685,6 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   );
 });
 
-/** Inner component that only mounts when there are actual changed files,
- *  so the store subscription is unconditional (no hooks after early return). */
 function AssistantChangedFilesSectionInner({
   turnSummary,
   checkpointFiles,
@@ -1692,10 +1726,6 @@ function AssistantChangedFilesSectionInner({
     />
   );
 }
-
-// ---------------------------------------------------------------------------
-// Leaf components
-// ---------------------------------------------------------------------------
 
 const UserMessageTerminalContextInlineLabel = memo(
   function UserMessageTerminalContextInlineLabel(props: { context: ParsedTerminalContextEntry }) {
@@ -1773,7 +1803,7 @@ function UserMessagePreviewAnnotationCard(props: {
           ) : null}
           {props.annotation.styleChanges.length > 0 ? (
             <span className="inline-flex shrink-0 items-center gap-1">
-              <PaintbrushIcon className="size-3" />
+              <PaintbrushIcon className="size-3 shrink-0" />
               {props.annotation.styleChanges.length}
             </span>
           ) : null}
@@ -2090,13 +2120,6 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   );
 }
 
-// ---------------------------------------------------------------------------
-// Structural sharing — reuse old row references when data hasn't changed
-// so LegendList (and React) can skip re-rendering unchanged items.
-// ---------------------------------------------------------------------------
-
-/** Returns a structurally-shared copy of `rows`: for each row whose content
- *  hasn't changed since last call, the previous object reference is reused. */
 function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
   const prevState = useRef<StableMessagesTimelineRowsState>({
     byId: new Map<string, MessagesTimelineRow>(),
@@ -2109,10 +2132,6 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     return nextState.result;
   }, [rows]);
 }
-
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
   const startedAtMs = Date.parse(startIso);
@@ -2192,27 +2211,15 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   className: string;
 } {
   if (tone === "error") {
-    return {
-      iconName: "circle-alert",
-      className: "text-foreground",
-    };
+    return { iconName: "circle-alert", className: "text-foreground" };
   }
   if (tone === "thinking") {
-    return {
-      iconName: "bot",
-      className: "text-foreground",
-    };
+    return { iconName: "bot", className: "text-foreground" };
   }
   if (tone === "info") {
-    return {
-      iconName: "check",
-      className: "text-icon-muted",
-    };
+    return { iconName: "check", className: "text-icon-muted" };
   }
-  return {
-    iconName: "zap",
-    className: "text-foreground",
-  };
+  return { iconName: "zap", className: "text-foreground" };
 }
 
 function workEntryPreview(
@@ -2416,8 +2423,6 @@ function liveWorkEntryLabel(
 ): string {
   const command = workEntry.command?.trim();
   if (command) {
-    // This row describes the active parent turn, not the command lifecycle.
-    // Keep its live "Running" copy until the turn or contiguous tool run settles.
     const program = commandProgramName(command);
     if (program) return `Running ${program}`;
     return "Running command";
@@ -2476,7 +2481,6 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
       return "bot";
   }
 
-  // Subagent lifecycle rows (grouped by taskId) get agent identity chrome.
   if (workEntry.taskId) {
     return "bot";
   }
@@ -2501,13 +2505,6 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 
 const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
 
-/**
- * A1 spawn CTA: one anchored row per workflow run (or per-turn direct-spawn
- * batch). Live status is derived from the shared agent panel model at render
- * time — the row itself never re-renders a roster; the Agents panel is the
- * only roster. Freezes to past tense when every member settles. Static dot,
- * no animation.
- */
 const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
   const { workEntry } = props;
   const { agentPanelModel, onOpenAgents } = use(TimelineRowCtx);
@@ -2533,10 +2530,6 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   ).length;
   const waiting = agents.filter((agent) => agent.status === "waiting").length;
   const failed = agents.filter((agent) => agent.status === "failed").length;
-  // The coordinator's own status is authoritative for workflows: dynamic
-  // spawns mean the member list can be momentarily all-settled while the
-  // run is still mid-flight (the "completed" lie from live testing). A
-  // workflow is live until the coordinator itself reaches a terminal state.
   const coordinatorStatus = workflowGroup?.workflow.status;
   const coordinatorSettled =
     coordinatorStatus === "completed" ||
@@ -2544,8 +2537,6 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
     coordinatorStatus === "cancelled" ||
     coordinatorStatus === "interrupted";
   const live = workflowGroup !== undefined ? !coordinatorSettled : running + waiting > 0;
-  // Same rule as the panel footer: providers may aggregate member usage into
-  // the coordinator, so count the coordinator only when no members exist.
   const totalTokens = agents.reduce(
     (sum, agent) => sum + (agent.usage?.totalTokens ?? 0),
     spawn.workflowId && agents.length === 0 ? (workflowGroup?.workflow.usage?.totalTokens ?? 0) : 0,
@@ -2555,8 +2546,6 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   const workflowName =
     workflowGroup?.workflow.workflowName ?? workflowGroup?.workflow.title ?? null;
 
-  // One steady in-flight presentation (monitoring-pill rule): waiting and
-  // stalled agents read as working; only settled states differentiate.
   const working = running + waiting;
   const dotClass = live ? "bg-info" : failed > 0 ? "bg-destructive" : "bg-success";
   const lead = live
@@ -2601,7 +2590,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   isExpandedToolGroupEntry: boolean;
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry } = props;
-  // Before any hooks: spawn CTA rows render their own component.
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
   }
