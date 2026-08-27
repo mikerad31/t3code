@@ -35,7 +35,7 @@ function resetInstance(input: {
   return {
     instanceId: input.instanceId,
     accountActions: {
-      consumeRateLimitResetCredit: ({ idempotencyKey }) =>
+      consumeRateLimitResetCredit: ({ idempotencyKey }: { readonly idempotencyKey: string }) =>
         Effect.sync(() => {
           input.onConsume(idempotencyKey);
           return "reset" as const;
