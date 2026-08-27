@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  FROZEN_HEAD_SHA: 2fca4286b2cedaadb686492c22608ef24bf393f6
+  FROZEN_HEAD_SHA: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
   BASE_SHA: ead4ce52a1624d9c55461f61524580978fc8b719
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           sparse-checkout: |
             /*
             !/.repos/
@@ -63,7 +63,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           sparse-checkout: |
             /*
             !/.repos/
@@ -91,7 +91,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           sparse-checkout: |
             /*
             !/.repos/
@@ -116,7 +116,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           sparse-checkout: |
             /*
             !/.repos/
@@ -138,7 +138,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           sparse-checkout: |
             /*
             !/.repos/
@@ -162,7 +162,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           fetch-depth: 0
       - name: Verify upstream native static analysis would skip
         run: |
@@ -186,7 +186,7 @@ jobs:
       - name: Checkout frozen feature head
         uses: actions/checkout@v6
         with:
-          ref: 2fca4286b2cedaadb686492c22608ef24bf393f6
+          ref: a82f12a108a25cfa3628a6b2d89ae78f42159d6f
           fetch-depth: 0
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
