@@ -1,0 +1,81 @@
+name: T3 quota server fixture fix
+
+on:
+  push:
+    branches: [feat/codex-quota-dashboard]
+    paths: [.github/workflows/t3-quota-server-fixture-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Wire ProviderInstanceRegistry into server test harness
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("apps/server/src/server.test.ts")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";'''
+          new = '''import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"provider import anchor mismatch: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    providerService?: Partial<ProviderService.ProviderService["Service"]>;'''
+          new = '''    providerInstanceRegistry?: Partial<ProviderInstanceRegistry.ProviderInstanceRegistryShape>;
+    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    providerService?: Partial<ProviderService.ProviderService["Service"]>;'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"provider layer option anchor mismatch: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''          Layer.mock(ProviderService.ProviderService)({
+            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'''
+          new = '''          Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+            getInstance: () => Effect.succeed(undefined),
+            listInstances: Effect.succeed([]),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.die(
+              "ProviderInstanceRegistry subscription is not stubbed in this test",
+            ),
+            ...options?.layers?.providerInstanceRegistry,
+          }),
+          Layer.mock(ProviderService.ProviderService)({
+            uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"provider service layer anchor mismatch: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8", newline="\n")
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Focused reset tests
+        run: vp test run apps/server/src/provider/consumeRateLimitResetCredit.test.ts
+      - name: Server seam tests
+        run: vp test run apps/server/src/server.test.ts
+      - name: Full repository typecheck
+        run: vpr typecheck
+      - name: Commit server fixture fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/server/src/server.test.ts
+          git commit -m "test(codex): provide provider instance registry in server harness"
+          git push origin HEAD:feat/codex-quota-dashboard
