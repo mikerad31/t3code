@@ -2,7 +2,9 @@ import { GaugeIcon, LoaderIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-reac
 import { useCallback, useMemo, useState } from "react";
 
 import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Random from "effect/Random";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEnvironments } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
@@ -260,7 +262,9 @@ export function SidebarCodexLimitsPopover() {
       // A failed transport/RPC attempt keeps its UUID so a retry cannot redeem
       // a second credit if the first response was merely lost after redemption.
       const idempotencyKey =
-        previousAttempt?.failed === true ? previousAttempt.idempotencyKey : crypto.randomUUID();
+        previousAttempt?.failed === true
+          ? previousAttempt.idempotencyKey
+          : `quota-reset:${Effect.runSync(Random.next).toString(36).slice(2)}`;
       setResetAttempts((current) => ({
         ...current,
         [targetKey]: {
