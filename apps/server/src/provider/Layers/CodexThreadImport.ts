@@ -198,7 +198,7 @@ export function makeCodexThreadImport(input: {
           if (thread.parentThreadId !== null || thread.ephemeral) continue;
           candidates.push(candidateFromThread(thread, archived));
         }
-        cursor = response.nextCursor;
+        cursor = response.nextCursor ?? null;
       } while (cursor);
       return candidates;
     });
