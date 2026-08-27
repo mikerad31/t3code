@@ -30,15 +30,6 @@ const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_
   Atom.withLabel("web-environment-thread:empty"),
 );
 
-function resolveEnvironmentThreadState(
-  result: ReturnType<typeof appAtomRegistry.get<typeof EMPTY_THREAD_STATE_ATOM>>,
-): EnvironmentThreadState {
-  return Option.getOrElse(
-    AsyncResult.value(result),
-    () => EMPTY_ENVIRONMENT_THREAD_STATE,
-  ) as EnvironmentThreadState;
-}
-
 export function useEnvironmentThread(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
@@ -48,14 +39,19 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  return resolveEnvironmentThreadState(result);
+  return Option.getOrElse(
+    AsyncResult.value(result),
+    () => EMPTY_ENVIRONMENT_THREAD_STATE,
+  ) as EnvironmentThreadState;
 }
 
 export function readEnvironmentThread(
   environmentId: EnvironmentId,
   threadId: ThreadId,
 ): EnvironmentThreadState {
-  return resolveEnvironmentThreadState(
-    appAtomRegistry.get(environmentThreads.stateAtom(environmentId, threadId)),
-  );
+  const result = appAtomRegistry.get(environmentThreads.stateAtom(environmentId, threadId));
+  return Option.getOrElse(
+    AsyncResult.value(result),
+    () => EMPTY_ENVIRONMENT_THREAD_STATE,
+  ) as EnvironmentThreadState;
 }
