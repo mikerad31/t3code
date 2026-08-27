@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+
 export interface CodexRateLimitWindowLike {
   readonly usedPercent: number;
   readonly windowDurationMins?: number | null;
@@ -78,7 +80,7 @@ function formatWindow(
  */
 export function formatCodexRateLimitMessage(
   rateLimits: CodexRateLimitsLike | null | undefined,
-  nowEpochSeconds = Date.now() / 1_000,
+  nowEpochSeconds = DateTime.toEpochSeconds(DateTime.nowUnsafe()),
 ): string | undefined {
   if (!rateLimits) return undefined;
 
