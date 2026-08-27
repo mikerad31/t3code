@@ -22,6 +22,12 @@ export type ThreadActionMenuId =
   | "copy-path"
   | "copy-branch"
   | "copy-thread-id"
+  | "inspect-thread"
+  | "expand-all"
+  | "collapse-all"
+  | "copy-full-thread"
+  | "export-thread-markdown"
+  | "export-thread-json"
   | "archive"
   | "delete";
 
@@ -34,6 +40,8 @@ export interface ThreadActionMenuState {
   readonly isRegeneratingTitle: boolean;
   /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
+  /** Chat-only inspection actions are omitted from sidebar-row menus. */
+  readonly chatInspection?: boolean;
   readonly supports: {
     readonly settlement: boolean;
     readonly snooze: boolean;
@@ -119,6 +127,27 @@ export function buildThreadActionMenuItems(
         { id: "copy-thread-id", label: "Thread ID", icon: "hash" },
       ],
     },
+    ...(state.chatInspection
+      ? [
+          {
+            id: "inspect-thread" as const,
+            label: "Inspect thread",
+            icon: "copy",
+            children: [
+              { id: "expand-all" as const, label: "Expand all" },
+              { id: "collapse-all" as const, label: "Collapse all" },
+              {
+                id: "copy-full-thread" as const,
+                label: "Copy full thread",
+                icon: "copy",
+                separatorBefore: true,
+              },
+              { id: "export-thread-markdown" as const, label: "Export Markdown" },
+              { id: "export-thread-json" as const, label: "Export JSON" },
+            ],
+          },
+        ]
+      : []),
     // Archive removes the thread from the sidebar while keeping its
     // conversation under Settings > Archived threads — distinct from Settle
     // (stays visible in the Settled shelf) and Delete (clears history for
