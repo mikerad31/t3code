@@ -116,7 +116,10 @@ function importMessages(
 function modelSelectionFor(
   instanceId: ProviderInstanceId,
   providerSnapshot: {
-    readonly models: ReadonlyArray<{ readonly slug: string; readonly isDefault?: boolean }>;
+    readonly models: ReadonlyArray<{
+      readonly slug: string;
+      readonly isDefault?: boolean | undefined;
+    }>;
   },
   fallback: ModelSelection | null,
 ): ModelSelection {
