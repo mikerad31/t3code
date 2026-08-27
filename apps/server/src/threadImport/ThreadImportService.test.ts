@@ -74,7 +74,7 @@ const sourceTranscript = (
 function makeProvider(threadImport: ProviderThreadImportShape): ProviderInstance {
   const snapshotValue = {
     models: [{ slug: "gpt-5.6-codex", isDefault: true }],
-  } as ServerProvider;
+  } as unknown as ServerProvider;
   return {
     instanceId,
     driverKind,
@@ -110,14 +110,14 @@ function makeHarness(options: {
     getSnapshot: () =>
       Effect.succeed({
         threads: importedThread === null ? [] : [importedThread],
-      } as OrchestrationReadModel),
+      } as unknown as OrchestrationReadModel),
     getThreadShellById: (threadId) =>
       Effect.succeed(
         importedThread !== null && String(importedThread.id) === String(threadId)
           ? Option.some(importedThread)
           : Option.none(),
       ),
-  } as ProjectionSnapshotQuery["Service"];
+  } as unknown as ProjectionSnapshotQuery["Service"];
 
   const engine = {
     dispatch: (command: OrchestrationCommand) => {
