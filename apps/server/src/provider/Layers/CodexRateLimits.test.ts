@@ -64,7 +64,40 @@ it("clamps malformed usage percentages and handles an elapsed reset", () => {
   );
 });
 
-it("returns undefined when no rate-limit windows are available", () => {
+it("appends the authoritative banked reset count when Codex reports it", () => {
+  assert.strictEqual(
+    formatCodexRateLimitMessage(
+      {
+        primary: { usedPercent: 27, windowDurationMins: 300 },
+      },
+      NOW,
+      { availableCount: 2 },
+    ),
+    "Limits — 5h: 73% left · Banked resets: 2",
+  );
+});
+
+it("preserves an authoritative zero banked reset count", () => {
+  assert.strictEqual(
+    formatCodexRateLimitMessage(
+      {
+        primary: { usedPercent: 0, windowDurationMins: 300 },
+      },
+      NOW,
+      { availableCount: 0 },
+    ),
+    "Limits — 5h: 100% left · Banked resets: 0",
+  );
+});
+
+it("can report banked resets even when no rate-limit windows are available", () => {
+  assert.strictEqual(
+    formatCodexRateLimitMessage(null, NOW, { availableCount: 1 }),
+    "Limits — Banked resets: 1",
+  );
+});
+
+it("returns undefined when neither rate-limit windows nor reset-credit data are available", () => {
   assert.strictEqual(formatCodexRateLimitMessage(null, NOW), undefined);
   assert.strictEqual(formatCodexRateLimitMessage({}, NOW), undefined);
 });
