@@ -43,12 +43,55 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
-function failureToast(title: string, error: unknown) {
+const THREAD_PREPARATION_FEEDBACK_DELAY_MS = 450;
+const THREAD_PREPARATION_TOAST_TIMEOUT_MS = 65_000;
+
+function failureToast(title: string, error: unknown, threadRef?: ScopedThreadRef) {
   toastManager.add(
     stackedThreadToast({
       type: "error",
       title,
       description: error instanceof Error ? error.message : "An error occurred.",
+      ...(threadRef === undefined ? {} : { data: { threadRef } }),
+    }),
+  );
+}
+
+async function loadCompleteThreadWithFeedback(threadRef: ScopedThreadRef, title: string) {
+  let loadingToastId: ReturnType<typeof toastManager.add> | null = null;
+  const loadingTimer = window.setTimeout(() => {
+    loadingToastId = toastManager.add(
+      stackedThreadToast({
+        type: "loading",
+        title,
+        timeout: THREAD_PREPARATION_TOAST_TIMEOUT_MS,
+        data: { threadRef, hideCopyButton: true },
+      }),
+    );
+  }, THREAD_PREPARATION_FEEDBACK_DELAY_MS);
+
+  try {
+    return await loadCompleteThread(threadRef);
+  } finally {
+    window.clearTimeout(loadingTimer);
+    if (loadingToastId !== null) {
+      toastManager.close(loadingToastId);
+    }
+  }
+}
+
+function exportedThreadToast(
+  threadRef: ScopedThreadRef,
+  format: "Markdown" | "JSON",
+  filename: string,
+) {
+  toastManager.add(
+    stackedThreadToast({
+      type: "success",
+      title: `${format} exported`,
+      description: filename,
+      timeout: 3_500,
+      data: { threadRef, hideCopyButton: true },
     }),
   );
 }
@@ -277,38 +320,51 @@ export function useThreadActionMenu(input: {
             return;
           case "copy-full-thread": {
             try {
-              const completeThread = await loadCompleteThread(threadRef);
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing full thread…",
+              );
               copyFullThreadToClipboard(formatThreadMarkdown(completeThread), {
                 title: completeThread.title,
               });
             } catch (error) {
-              failureToast("Failed to copy full thread", error);
+              failureToast("Failed to copy full thread", error, threadRef);
             }
             return;
           }
           case "export-thread-markdown": {
             try {
-              const completeThread = await loadCompleteThread(threadRef);
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing Markdown export…",
+              );
+              const filename = `${threadExportBaseName(completeThread)}.md`;
               downloadTextFile({
-                filename: `${threadExportBaseName(completeThread)}.md`,
+                filename,
                 text: formatThreadMarkdown(completeThread),
                 mimeType: "text/markdown;charset=utf-8",
               });
+              exportedThreadToast(threadRef, "Markdown", filename);
             } catch (error) {
-              failureToast("Failed to export Markdown", error);
+              failureToast("Failed to export Markdown", error, threadRef);
             }
             return;
           }
           case "export-thread-json": {
             try {
-              const completeThread = await loadCompleteThread(threadRef);
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing JSON export…",
+              );
+              const filename = `${threadExportBaseName(completeThread)}.json`;
               downloadTextFile({
-                filename: `${threadExportBaseName(completeThread)}.json`,
+                filename,
                 text: formatThreadJson(completeThread),
                 mimeType: "application/json;charset=utf-8",
               });
+              exportedThreadToast(threadRef, "JSON", filename);
             } catch (error) {
-              failureToast("Failed to export JSON", error);
+              failureToast("Failed to export JSON", error, threadRef);
             }
             return;
           }
