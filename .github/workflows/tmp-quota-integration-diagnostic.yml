@@ -101,7 +101,7 @@ jobs:
           packages/contracts/src/provider.ts
           packages/contracts/src/rpc.ts
           EOF
-          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | sort > /tmp/actual-files.txt
+          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | grep -vF '.github/workflows/tmp-quota-integration-diagnostic.yml' | sort > /tmp/actual-files.txt
           sort -o /tmp/expected-files.txt /tmp/expected-files.txt
           echo "=== expected ==="
           cat /tmp/expected-files.txt
@@ -171,7 +171,7 @@ jobs:
         run: |
           git diff --check
           test -z "$(git diff --name-only --diff-filter=U)"
-          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | sort > /tmp/actual-files-after.txt
+          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | grep -vF '.github/workflows/tmp-quota-integration-diagnostic.yml' | sort > /tmp/actual-files-after.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
           git status --short
 
