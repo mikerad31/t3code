@@ -175,6 +175,7 @@ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
   deriveProviderEntriesByEnvironment,
+  resolveProviderInstanceIdentity,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
@@ -270,7 +271,9 @@ function SidebarThreadTooltip({
   projectFaviconPath,
   environmentLabel,
   providerEntry,
+  providerIdentityLabel,
   showInstanceBadge,
+  showProviderIdentity,
   modelInstanceId,
   modelLabel,
   branchMismatch,
@@ -283,7 +286,9 @@ function SidebarThreadTooltip({
   projectFaviconPath: string | null;
   environmentLabel: string | null;
   providerEntry: ProviderInstanceEntry | null;
+  providerIdentityLabel: string;
   showInstanceBadge: boolean;
+  showProviderIdentity: boolean;
   modelInstanceId: string;
   modelLabel: string;
   branchMismatch: {
@@ -342,9 +347,7 @@ function SidebarThreadTooltip({
             <div className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
                 driverKind={driverKind}
-                displayName={
-                  providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
-                }
+                displayName={providerIdentityLabel}
                 accentColor={providerEntry?.accentColor}
                 // Initials would swallow a size-3 glyph: accent dot, name in label.
                 showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
@@ -353,9 +356,7 @@ function SidebarThreadTooltip({
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
               <div className="min-w-0 truncate text-foreground/75">
-                {showInstanceBadge && providerEntry
-                  ? `${modelLabel} · ${providerEntry.displayName}`
-                  : modelLabel}
+                {showProviderIdentity ? `${modelLabel} · ${providerIdentityLabel}` : modelLabel}
               </div>
             </div>
           ) : null}
@@ -949,6 +950,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -967,7 +978,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
       providerEntry={providerEntry}
+      providerIdentityLabel={providerIdentityLabel}
       showInstanceBadge={showInstanceBadge}
+      showProviderIdentity={showProviderIdentity}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
@@ -1276,6 +1289,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               />
             </span>
             {title}
+            {driverKind && showProviderIdentity ? (
+              <span
+                role="img"
+                aria-label={`Provider ${providerIdentityLabel}`}
+                className="inline-flex shrink-0 items-center"
+              >
+                <ProviderInstanceIcon
+                  driverKind={driverKind}
+                  displayName={providerIdentityLabel}
+                  accentColor={providerEntry?.accentColor}
+                  showBadge
+                  iconClassName="size-3.5 opacity-60"
+                  badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+                />
+              </span>
+            ) : null}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -1588,11 +1617,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
                       driverKind={driverKind}
-                      displayName={
-                        providerEntry?.displayName ??
-                        thread.session?.providerName ??
-                        modelInstanceId
-                      }
+                      displayName={providerIdentityLabel}
                       accentColor={providerEntry?.accentColor}
                       showBadge={showInstanceBadge}
                       // Glyph dims, badge stays saturated; offset matches the composer trigger.
@@ -1657,6 +1682,16 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1704,6 +1739,22 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             fallbackIcon={MessageSquareIcon}
           />
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          {providerEntry?.driverKind && showProviderIdentity ? (
+            <span
+              role="img"
+              aria-label={`Provider ${providerIdentityLabel}`}
+              className="inline-flex shrink-0 items-center"
+            >
+              <ProviderInstanceIcon
+                driverKind={providerEntry.driverKind}
+                displayName={providerIdentityLabel}
+                accentColor={providerEntry.accentColor}
+                showBadge
+                iconClassName="size-3.5 opacity-60"
+                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+              />
+            </span>
+          ) : null}
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
             {threadTimeLabel(thread)}
           </span>
@@ -1715,7 +1766,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
           providerEntry={providerEntry}
+          providerIdentityLabel={providerIdentityLabel}
           showInstanceBadge={showInstanceBadge}
+          showProviderIdentity={showProviderIdentity}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}
           branchMismatch={branchMismatch}
