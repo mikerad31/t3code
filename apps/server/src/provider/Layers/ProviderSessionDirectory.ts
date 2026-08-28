@@ -117,8 +117,20 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     const providerChanged =
       existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
+    // A provider instance is part of the runtime identity just as much as the
+    // driver kind. Carrying resume state across codex_a1 -> codex_a2 can make
+    // the new account attempt to resume the old account's native thread.
+    // Legacy rows with no persisted instance id are intentionally exempt so
+    // their pre-instance-split resume state can migrate onto the default
+    // instance instead of being discarded.
+    const providerInstanceChanged =
+      existingRuntime?.providerInstanceId !== null &&
+      existingRuntime?.providerInstanceId !== undefined &&
+      binding.providerInstanceId !== undefined &&
+      existingRuntime.providerInstanceId !== binding.providerInstanceId;
+    const providerIdentityChanged = providerChanged || providerInstanceChanged;
     const providerInstanceId =
-      binding.providerInstanceId ?? (!providerChanged ? existingRuntime?.providerInstanceId : null);
+      binding.providerInstanceId ?? (!providerIdentityChanged ? existingRuntime?.providerInstanceId : null);
     if (providerInstanceId === null || providerInstanceId === undefined) {
       return yield* new ProviderValidationError({
         operation: "ProviderSessionDirectory.upsert",
@@ -132,16 +144,20 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         providerInstanceId,
         adapterKey:
           binding.adapterKey ??
-          (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
+          (providerIdentityChanged
+            ? binding.provider
+            : (existingRuntime?.adapterKey ?? binding.provider)),
         runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
         resumeCursor:
           binding.resumeCursor !== undefined
             ? binding.resumeCursor
-            : (existingRuntime?.resumeCursor ?? null),
+            : providerIdentityChanged
+              ? null
+              : (existingRuntime?.resumeCursor ?? null),
         runtimePayload: mergeRuntimePayload(
-          existingRuntime?.runtimePayload ?? null,
+          providerIdentityChanged ? null : (existingRuntime?.runtimePayload ?? null),
           binding.runtimePayload,
         ),
       })
