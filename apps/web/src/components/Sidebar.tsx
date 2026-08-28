@@ -43,6 +43,7 @@ import {
   CircleDashedIcon,
   ClockIcon,
   DownloadIcon,
+  EllipsisIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -183,7 +184,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -1785,12 +1786,13 @@ function SidebarProjectSectionHeader(props: {
   expanded: boolean;
   threadCount: number;
   onToggle: () => void;
-  onCreateThread: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onImportConversations: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onOpenSettings: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onCreateThread: (event: ReactMouseEvent<HTMLElement>) => void;
+  onImportConversations: (event: ReactMouseEvent<HTMLElement>) => void;
+  onOpenSettings: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const actionClassName =
-    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring";
+    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring max-sm:size-8";
 
   return (
     <div className="group/project-section relative" data-thread-selection-safe>
@@ -1799,7 +1801,7 @@ function SidebarProjectSectionHeader(props: {
         aria-expanded={props.expanded}
         aria-label={`${props.expanded ? "Collapse" : "Expand"} ${props.project.displayName}`}
         onClick={props.onToggle}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[5.25rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[3.5rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring max-sm:pr-[4.5rem]"
       >
         <ChevronDownIcon
           aria-hidden
@@ -1826,7 +1828,12 @@ function SidebarProjectSectionHeader(props: {
           {props.threadCount}
         </span>
       </button>
-      <div className="pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:pointer-events-auto max-sm:opacity-100">
+      <div
+        className={cn(
+          "pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:right-0 max-sm:top-0 max-sm:pointer-events-auto max-sm:opacity-100",
+          moreMenuOpen && "pointer-events-auto opacity-100",
+        )}
+      >
         <Tooltip>
           <TooltipTrigger
             render={
@@ -1842,36 +1849,33 @@ function SidebarProjectSectionHeader(props: {
           </TooltipTrigger>
           <TooltipPopup side="top">New thread</TooltipPopup>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
+        <Menu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
+          <MenuTrigger
             render={
               <button
                 type="button"
                 className={actionClassName}
-                aria-label={`Import conversations into ${props.project.displayName}`}
-                onClick={props.onImportConversations}
+                aria-label={`More actions for ${props.project.displayName}`}
               />
             }
           >
-            <DownloadIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Import conversations</TooltipPopup>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                className={actionClassName}
-                aria-label={`Project settings for ${props.project.displayName}`}
-                onClick={props.onOpenSettings}
-              />
-            }
-          >
-            <SettingsIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Project settings</TooltipPopup>
-        </Tooltip>
+            <EllipsisIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="bottom" sideOffset={4} className="min-w-44">
+            <MenuItem
+              render={<button type="button" />}
+              closeOnClick
+              onClick={props.onImportConversations}
+            >
+              <DownloadIcon />
+              <span>Import conversations</span>
+            </MenuItem>
+            <MenuItem render={<button type="button" />} closeOnClick onClick={props.onOpenSettings}>
+              <SettingsIcon />
+              <span>Project settings</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
       </div>
     </div>
   );
@@ -2198,7 +2202,7 @@ export default function Sidebar() {
   }, [clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -2214,7 +2218,7 @@ export default function Sidebar() {
   );
 
   const handleImportConversations = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -2223,7 +2227,7 @@ export default function Sidebar() {
     [],
   );
   const handleCreateProjectThread = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       if (isMobile) setOpenMobile(false);
