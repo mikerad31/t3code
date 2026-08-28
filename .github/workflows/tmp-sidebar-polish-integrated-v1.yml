@@ -1,0 +1,63 @@
+name: Validate integrated sidebar polish
+
+on:
+  push:
+    branches:
+      - validate/sidebar-polish-integrated-v1
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Assert validator-only branch surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          .github/workflows/tmp-sidebar-polish-integrated-v1.yml
+          EOF
+          git diff --name-only af934b8129473c6e2a35bc4a61bb38151e24d043 | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused cross-feature regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/providerInstances.test.ts \
+            src/components/Sidebar.logic.test.ts \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts \
+            src/components/threadActionMenu.logic.test.ts \
+            src/threadExport.logic.test.ts \
+            src/threadInspectionBus.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only af934b8129473c6e2a35bc4a61bb38151e24d043 | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
