@@ -56,6 +56,98 @@ type LogicalSidebarProject = SidebarProject & {
   }[];
 };
 
+export interface SidebarProjectThreadSection<TProject, TThread> {
+  project: TProject;
+  pinnedThreads: TThread[];
+  activeThreads: TThread[];
+  snoozedThreads: TThread[];
+  settledThreads: TThread[];
+}
+
+export interface SidebarUngroupedThreadBuckets<TThread> {
+  pinnedThreads: TThread[];
+  activeThreads: TThread[];
+  snoozedThreads: TThread[];
+  settledThreads: TThread[];
+}
+
+export function buildSidebarProjectThreadSections<
+  TProject extends LogicalSidebarProject,
+  TThread extends Pick<ScopedSidebarThread, "environmentId" | "projectId">,
+>(input: {
+  projects: readonly TProject[];
+  pinnedThreads: readonly TThread[];
+  activeThreads: readonly TThread[];
+  snoozedThreads: readonly TThread[];
+  settledThreads: readonly TThread[];
+}): {
+  sections: SidebarProjectThreadSection<TProject, TThread>[];
+  ungroupedThreads: SidebarUngroupedThreadBuckets<TThread>;
+} {
+  const sections = input.projects.map(
+    (project): SidebarProjectThreadSection<TProject, TThread> => ({
+      project,
+      pinnedThreads: [],
+      activeThreads: [],
+      snoozedThreads: [],
+      settledThreads: [],
+    }),
+  );
+  const sectionByProjectKey = new Map(
+    sections.map((section) => [section.project.projectKey, section] as const),
+  );
+  const projectKeyByPhysicalRef = new Map(
+    input.projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  const ungroupedThreads: SidebarUngroupedThreadBuckets<TThread> = {
+    pinnedThreads: [],
+    activeThreads: [],
+    snoozedThreads: [],
+    settledThreads: [],
+  };
+  const assignThreads = (
+    threads: readonly TThread[],
+    selectTarget: (section: SidebarProjectThreadSection<TProject, TThread>) => TThread[],
+    fallback: TThread[],
+  ) => {
+    for (const thread of threads) {
+      const projectKey = projectKeyByPhysicalRef.get(
+        `${thread.environmentId}\0${thread.projectId}`,
+      );
+      const section = projectKey ? sectionByProjectKey.get(projectKey) : undefined;
+      (section ? selectTarget(section) : fallback).push(thread);
+    }
+  };
+
+  assignThreads(
+    input.pinnedThreads,
+    (section) => section.pinnedThreads,
+    ungroupedThreads.pinnedThreads,
+  );
+  assignThreads(
+    input.activeThreads,
+    (section) => section.activeThreads,
+    ungroupedThreads.activeThreads,
+  );
+  assignThreads(
+    input.snoozedThreads,
+    (section) => section.snoozedThreads,
+    ungroupedThreads.snoozedThreads,
+  );
+  assignThreads(
+    input.settledThreads,
+    (section) => section.settledThreads,
+    ungroupedThreads.settledThreads,
+  );
+
+  return { sections, ungroupedThreads };
+}
+
 export type ThreadTraversalDirection = "previous" | "next";
 
 export async function archiveSelectedThreadEntries<

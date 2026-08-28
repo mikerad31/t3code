@@ -5,6 +5,7 @@ import {
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
+  buildSidebarProjectThreadSections,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -1708,5 +1709,77 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+describe("buildSidebarProjectThreadSections", () => {
+  it("preserves logical project order, groups physical members, and never drops orphan threads", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const projectALocal = ProjectId.make("project-a-local");
+    const projectARemote = ProjectId.make("project-a-remote");
+    const projectB = ProjectId.make("project-b");
+    const orphanProject = ProjectId.make("project-orphan");
+    const projects = [
+      {
+        id: "representative-a",
+        title: "Project A",
+        projectKey: "logical-a",
+        memberProjectRefs: [
+          { environmentId: localEnvironmentId, projectId: projectALocal },
+          { environmentId: remoteEnvironmentId, projectId: projectARemote },
+        ],
+      },
+      {
+        id: "representative-b",
+        title: "Project B",
+        projectKey: "logical-b",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: projectB }],
+      },
+    ];
+    const makeSectionThread = (id: string, environmentId: EnvironmentId, projectId: ProjectId) => ({
+      id,
+      environmentId,
+      projectId,
+    });
+
+    const result = buildSidebarProjectThreadSections({
+      projects,
+      pinnedThreads: [makeSectionThread("pinned-a", remoteEnvironmentId, projectARemote)],
+      activeThreads: [
+        makeSectionThread("active-a", localEnvironmentId, projectALocal),
+        makeSectionThread("active-b", localEnvironmentId, projectB),
+        makeSectionThread("active-orphan", localEnvironmentId, orphanProject),
+      ],
+      snoozedThreads: [makeSectionThread("snoozed-b", localEnvironmentId, projectB)],
+      settledThreads: [makeSectionThread("settled-a", localEnvironmentId, projectALocal)],
+    });
+
+    expect(
+      result.sections.map((section) => ({
+        projectKey: section.project.projectKey,
+        pinned: section.pinnedThreads.map((thread) => thread.id),
+        active: section.activeThreads.map((thread) => thread.id),
+        snoozed: section.snoozedThreads.map((thread) => thread.id),
+        settled: section.settledThreads.map((thread) => thread.id),
+      })),
+    ).toEqual([
+      {
+        projectKey: "logical-a",
+        pinned: ["pinned-a"],
+        active: ["active-a"],
+        snoozed: [],
+        settled: ["settled-a"],
+      },
+      {
+        projectKey: "logical-b",
+        pinned: [],
+        active: ["active-b"],
+        snoozed: ["snoozed-b"],
+        settled: [],
+      },
+    ]);
+    expect(result.ungroupedThreads.activeThreads.map((thread) => thread.id)).toEqual([
+      "active-orphan",
+    ]);
   });
 });
