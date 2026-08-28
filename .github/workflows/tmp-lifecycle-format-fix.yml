@@ -1,0 +1,85 @@
+name: Validate lifecycle formatting fix
+
+on:
+  push:
+    branches:
+      - tmp/lifecycle-format-fix-validation
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format lifecycle files flagged by conformance
+        run: |
+          pnpm exec vp fmt \
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            apps/server/src/provider/Layers/ProviderSessionDirectory.ts
+
+      - name: Assert formatter-only product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+          apps/server/src/provider/Layers/ProviderSessionDirectory.ts
+          EOF
+          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | grep -vF '.github/workflows/tmp-lifecycle-format-fix.yml' | sort > /tmp/actual-files.txt
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused lifecycle regressions
+        run: |
+          pnpm --filter @t3tools/server exec vp test run \
+            src/provider/Layers/ProviderSessionDirectory.instanceSwitch.test.ts \
+            src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Server typecheck
+        run: pnpm --filter @t3tools/server typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          git diff --name-only 1778683ea7314ee371fabf3a0a3e2bfc3437508c | grep -vF '.github/workflows/tmp-lifecycle-format-fix.yml' | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/lifecycle-format-blobs
+          : > /tmp/lifecycle-format-blobs/manifest.txt
+          while IFS= read -r file
+          do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/lifecycle-format-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-format-blobs
+          path: /tmp/lifecycle-format-blobs/manifest.txt
+          retention-days: 1
