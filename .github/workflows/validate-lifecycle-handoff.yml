@@ -1,0 +1,82 @@
+name: Validate lifecycle handoff patch
+
+on:
+  push:
+    branches:
+      - tmp/lifecycle-handoff-validation-run
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.10.0 --activate
+
+      - name: Apply exact handoff-order patch
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          reactor = Path('apps/server/src/orchestration/Layers/ProviderCommandReactor.ts')
+          text = reactor.read_text()
+          old = '''        hasResumeCursor: resumeCursor !== undefined,\n      });\n      const restartedSession = yield* startProviderSession(\n'''
+          new = '''        hasResumeCursor: resumeCursor !== undefined,\n      });\n      if (instanceChanged) {\n        yield* providerService.stopSession({ threadId });\n      }\n      const restartedSession = yield* startProviderSession(\n'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected reactor anchor exactly once, found {count}')
+          reactor.write_text(text.replace(old, new, 1))
+
+          test = Path('apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts')
+          text = test.read_text()
+          old = '''      resumeCursor: { opaque: "resume-1" },\n    });\n\n    const readModel = await harness.readModel();\n'''
+          new = '''      resumeCursor: { opaque: "resume-1" },\n    });\n    expect(harness.stopSession).toHaveBeenCalledTimes(1);\n    expect(harness.stopSession.mock.invocationCallOrder[0]).toBeLessThan(\n      harness.startSession.mock.invocationCallOrder[1]!,\n    );\n\n    const readModel = await harness.readModel();\n'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected test anchor exactly once, found {count}')
+          test.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Patch diff sanity
+        run: |
+          git diff --check
+          git diff -- apps/server/src/orchestration/Layers/ProviderCommandReactor.ts apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Focused reactor regression
+        run: pnpm exec vp test run apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Server typecheck
+        run: pnpm --filter t3 typecheck
+
+      - name: Publish validated blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          : > lifecycle-handoff-blobs.txt
+          for file in \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.ts \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$file" "$sha" | tee -a lifecycle-handoff-blobs.txt
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-handoff-blobs
+          path: lifecycle-handoff-blobs.txt
