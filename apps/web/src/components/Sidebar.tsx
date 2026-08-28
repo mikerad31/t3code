@@ -3877,54 +3877,63 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                         <span className="min-w-0 truncate text-sm">All projects</span>
                       </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                          >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Import conversations into ${project.displayName}`}
-                              title={`Import conversations into ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                handleImportConversations(event, project);
-                              }}
-                            >
-                              <DownloadIcon className="size-3.5" />
-                            </Button>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Project settings for ${project.displayName}`}
-                              title={`Project settings for ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectSettings(event, project);
-                              }}
-                            >
-                              <SettingsIcon className="size-3.5" />
-                            </Button>
-                          </MenuRadioItem>
-                        );
-                      })}
+                      {projectGroups.map((project) => (
+                        <MenuRadioItem
+                          key={project.projectKey}
+                          value={project.projectKey}
+                          closeOnClick
+                          className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        >
+                          <ProjectFavicon
+                            environmentId={project.environmentId}
+                            cwd={project.workspaceRoot}
+                            faviconPath={project.faviconPath}
+                            className="size-4 shrink-0"
+                          />
+                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                        </MenuRadioItem>
+                      ))}
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+                {scopedProjectGroup !== null ? (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          type="button"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          aria-label={`Project actions for ${scopedProjectGroup.displayName}`}
+                        />
+                      }
+                    >
+                      <EllipsisIcon />
+                      <span
+                        className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                        aria-hidden="true"
+                      />
+                    </MenuTrigger>
+                    <MenuPopup align="end" className="min-w-44">
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => handleImportConversations(event, scopedProjectGroup)}
+                      >
+                        <DownloadIcon />
+                        <span>Import conversations</span>
+                      </MenuItem>
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => void handleProjectSettings(event, scopedProjectGroup)}
+                      >
+                        <SettingsIcon />
+                        <span>Project settings</span>
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
+                ) : null}
                 {scopedProjectGroup === null && projectGroups.length > 1 ? (
                   <Tooltip>
                     <TooltipTrigger
