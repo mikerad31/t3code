@@ -20,8 +20,9 @@ jobs:
       - name: Transplant proven web inspection/export surface
         run: |
           set -euo pipefail
-          git fetch origin feat/thread-inspection-export
-          git checkout origin/feat/thread-inspection-export -- \
+          export_source=f97e0802468ae23278ad16385776eeec28cdcf92
+          git fetch origin "$export_source"
+          git checkout "$export_source" -- \
             apps/web/src/components/chat/MessagesTimeline.tsx \
             apps/web/src/components/threadActionMenu.logic.test.ts \
             apps/web/src/components/threadActionMenu.logic.ts \
@@ -92,7 +93,21 @@ jobs:
         run: pnpm --filter @t3tools/web exec vp test run
 
       - name: Full monorepo typecheck
-        run: pnpm typecheck
+        shell: bash
+        run: |
+          set +e
+          pnpm typecheck 2>&1 | tee /tmp/thread-export-typecheck.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Upload typecheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thread-inspection-export-typecheck-log
+          path: /tmp/thread-export-typecheck.log
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Final diff sanity
         run: |
