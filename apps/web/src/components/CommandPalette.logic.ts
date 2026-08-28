@@ -16,6 +16,44 @@ export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
+export function selectNewThreadImportCandidateIds<TId>(
+  candidates: ReadonlyArray<{ readonly candidateId: TId; readonly alreadyImported: boolean }>,
+): TId[] {
+  return candidates
+    .filter((candidate) => !candidate.alreadyImported)
+    .map((candidate) => candidate.candidateId);
+}
+
+export function summarizeAutoThreadImportResults(
+  results: ReadonlyArray<{
+    readonly status: "imported" | "already-imported" | "transcript-only" | "failed";
+  }>,
+) {
+  let importedCount = 0;
+  let transcriptOnlyCount = 0;
+  let alreadyImportedCount = 0;
+  let failedCount = 0;
+
+  for (const result of results) {
+    switch (result.status) {
+      case "imported":
+        importedCount += 1;
+        break;
+      case "transcript-only":
+        transcriptOnlyCount += 1;
+        break;
+      case "already-imported":
+        alreadyImportedCount += 1;
+        break;
+      case "failed":
+        failedCount += 1;
+        break;
+    }
+  }
+
+  return { importedCount, transcriptOnlyCount, alreadyImportedCount, failedCount };
+}
+
 export function browseInputEndPaddingClass(input: {
   readonly willCreateProjectPath: boolean;
   readonly hasHighlightedBrowseItem: boolean;
