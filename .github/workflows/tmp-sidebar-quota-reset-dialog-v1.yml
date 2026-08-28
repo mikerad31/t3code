@@ -1,0 +1,134 @@
+name: Validate quota reset dialog polish
+
+on:
+  push:
+    branches:
+      - validate/sidebar-quota-reset-dialog-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply product patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx")
+          text = path.read_text()
+
+          old = '''import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";\nimport { Button } from "../ui/button";'''
+          new = '''import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";\nimport {\n  AlertDialog,\n  AlertDialogDescription,\n  AlertDialogFooter,\n  AlertDialogHeader,\n  AlertDialogPopup,\n  AlertDialogTitle,\n} from "../ui/alert-dialog";\nimport { Button } from "../ui/button";'''
+          if text.count(old) != 1:
+              raise SystemExit(f"alert-dialog import seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''  const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>(\n    {},\n  );'''
+          new = '''  const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>(\n    {},\n  );\n  const [resetConfirmationEntry, setResetConfirmationEntry] = useState<CodexLimitEntry | null>(\n    null,\n  );'''
+          if text.count(old) != 1:
+              raise SystemExit(f"confirmation state seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          start_marker = '''  const useReset = useCallback(\n'''
+          end_marker = '''\n\n  if (entries.length === 0) return null;'''
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+          if start == -1 or end == -1:
+              raise SystemExit("reset callback seam not found")
+          replacement = '''  const performReset = useCallback(\n    (entry: CodexLimitEntry) => {\n      const targetKey = resetAttemptKey(entry);\n      const previousAttempt = resetAttempts[targetKey];\n      if (previousAttempt?.pending) return;\n\n      // A failed transport/RPC attempt keeps its UUID so a retry cannot redeem\n      // a second credit if the first response was merely lost after redemption.\n      const idempotencyKey =\n        previousAttempt?.failed === true\n          ? previousAttempt.idempotencyKey\n          : `quota-reset:${Effect.runSync(Random.next).toString(36).slice(2)}`;\n      setResetAttempts((current) => ({\n        ...current,\n        [targetKey]: {\n          idempotencyKey,\n          pending: true,\n          failed: false,\n          message: null,\n        },\n      }));\n\n      void consumeRateLimitResetCredit({\n        environmentId: entry.environmentId,\n        input: {\n          instanceId: entry.provider.instanceId,\n          idempotencyKey,\n        },\n      }).then((settled) => {\n        const result = Option.getOrNull(AsyncResult.value(settled));\n        if (result === null) {\n          setResetAttempts((current) => ({\n            ...current,\n            [targetKey]: {\n              idempotencyKey,\n              pending: false,\n              failed: true,\n              message:\n                "Reset request failed. Retry will reuse the same redemption attempt for safety.",\n            },\n          }));\n          return;\n        }\n\n        setResetAttempts((current) => ({\n          ...current,\n          [targetKey]: {\n            idempotencyKey,\n            pending: false,\n            failed: false,\n            message: resetOutcomeMessage(result.outcome),\n          },\n        }));\n      });\n    },\n    [consumeRateLimitResetCredit, resetAttempts],\n  );\n\n  const requestReset = useCallback(\n    (entry: CodexLimitEntry) => {\n      if (resetAttempts[resetAttemptKey(entry)]?.pending) return;\n      setResetConfirmationEntry(entry);\n    },\n    [resetAttempts],\n  );\n\n  const confirmReset = useCallback(() => {\n    const entry = resetConfirmationEntry;\n    if (entry === null) return;\n    setResetConfirmationEntry(null);\n    performReset(entry);\n  }, [performReset, resetConfirmationEntry]);'''
+          text = text[:start] + replacement + text[end:]
+
+          if text.count('onUseReset={useReset}') != 1:
+              raise SystemExit("quota card reset handler seam not found")
+          text = text.replace('onUseReset={useReset}', 'onUseReset={requestReset}', 1)
+
+          old = '''  return (\n    <SidebarMenuItem className="shrink-0">'''
+          new = '''  return (\n    <>\n      <SidebarMenuItem className="shrink-0">'''
+          if text.count(old) != 1:
+              raise SystemExit(f"return fragment seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''      </Popover>\n    </SidebarMenuItem>\n  );\n}'''
+          new = '''        </Popover>\n      </SidebarMenuItem>\n      <AlertDialog\n        open={resetConfirmationEntry !== null}\n        onOpenChange={(open) => {\n          if (!open) setResetConfirmationEntry(null);\n        }}\n      >\n        <AlertDialogPopup>\n          <AlertDialogHeader>\n            <AlertDialogTitle>Use a banked reset?</AlertDialogTitle>\n            <AlertDialogDescription>\n              {resetConfirmationEntry\n                ? `Codex will attempt to redeem one earned reset for ${resetConfirmationEntry.accountLabel}. If no active limit needs resetting, Codex reports that without using a credit.`\n                : "Codex will attempt to redeem one earned reset for this account."}\n            </AlertDialogDescription>\n          </AlertDialogHeader>\n          <AlertDialogFooter>\n            <Button\n              type="button"\n              variant="outline"\n              onClick={() => setResetConfirmationEntry(null)}\n            >\n              Cancel\n            </Button>\n            <Button type="button" onClick={confirmReset}>\n              <RotateCcwIcon className="size-3.5" />\n              Use reset\n            </Button>\n          </AlertDialogFooter>\n        </AlertDialogPopup>\n      </AlertDialog>\n    </>\n  );\n}'''
+          if text.count(old) != 1:
+              raise SystemExit(f"dialog insertion seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          if "window.confirm" in text:
+              raise SystemExit("browser-native reset confirmation remained")
+
+          path.write_text(text)
+          PY
+
+      - name: Format product file
+        run: pnpm exec vp fmt apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx
+
+      - name: Assert exact product surface
+        run: |
+          printf '%s\n' 'apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx' > /tmp/expected-files.txt
+          git diff --name-only af934b8129473c6e2a35bc4a61bb38151e24d043 \
+            | grep -v '^.github/workflows/tmp-sidebar-quota-reset-dialog-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused quota regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/providerInstances.test.ts \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only af934b8129473c6e2a35bc4a61bb38151e24d043 \
+            | grep -v '^.github/workflows/tmp-sidebar-quota-reset-dialog-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-quota-reset-dialog-blobs
+          file='apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx'
+          base64 -w0 "$file" > /tmp/blob-content.b64
+          jq -n --rawfile content /tmp/blob-content.b64 \
+            '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+          printf '%s %s\n' "$sha" "$file" | tee /tmp/sidebar-quota-reset-dialog-blobs/manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-quota-reset-dialog-v1-blobs
+          path: /tmp/sidebar-quota-reset-dialog-blobs/manifest.txt
+          retention-days: 1
