@@ -1,0 +1,161 @@
+name: Validate stale Codex import UX
+
+on:
+  push:
+    branches:
+      - fix/codex-import-stale-history-ux
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply guarded stale-history UX patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one anchor, found {count}: {old[:100]!r}")
+              file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "packages/contracts/src/threadImports.ts",
+              '''export const ThreadImportItemStatus = Schema.Literals([\n  "imported",\n  "already-imported",\n  "transcript-only",\n  "failed",\n]);\n''',
+              '''export const ThreadImportItemStatus = Schema.Literals([\n  "imported",\n  "already-imported",\n  "transcript-only",\n  "skipped",\n  "failed",\n]);\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''            status: "failed",\n            threadId: null,\n            importedMessageCount: 0,\n            warnings: [],\n            error: "The Codex thread is no longer available for this project.",\n''',
+              '''            status: "skipped",\n            threadId: null,\n            importedMessageCount: 0,\n            warnings: [],\n            error: "The Codex thread is no longer available for this project.",\n''',
+          )
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''            status: transcriptAlreadyImported ? "transcript-only" : "failed",\n            threadId: transcriptAlreadyImported ? threadId : null,\n''',
+              '''            status: transcriptAlreadyImported ? "transcript-only" : "skipped",\n            threadId: transcriptAlreadyImported ? threadId : null,\n''',
+          )
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''          results.push({\n            candidateId,\n            status: "failed",\n            threadId: null,\n            importedMessageCount: 0,\n            warnings: [...transcript.warnings],\n            error: "The Codex thread contains no readable user or assistant messages.",\n          });\n''',
+              '''          results.push({\n            candidateId,\n            status: "skipped",\n            threadId: null,\n            importedMessageCount: 0,\n            warnings: [...transcript.warnings],\n            error: "The Codex thread contains no readable user or assistant messages.",\n          });\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.test.ts",
+              '''        expect(result.results.map((item) => item.status)).toEqual(["failed", "imported"]);\n''',
+              '''        expect(result.results.map((item) => item.status)).toEqual(["skipped", "imported"]);\n''',
+          )
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.test.ts",
+              '''  it.effect(\n    "prefers the project's configured Codex instance when several accounts share one history store",\n''',
+              '''  it.effect("skips empty Codex transcripts without reporting a product failure", () =>\n    Effect.gen(function* () {\n      const harness = makeHarness({\n        candidates: [sourceCandidate()],\n        read: () => Effect.succeed(sourceTranscript({ messages: [] })),\n      });\n      const scan = yield* harness.service.scan({ projectId });\n      const result = yield* harness.service.commit({\n        projectId,\n        candidateIds: [scan.candidates[0]!.candidateId],\n        runtimeMode: "full-access",\n        interactionMode: "default",\n      });\n\n      expect(result.results[0]).toMatchObject({\n        status: "skipped",\n        importedMessageCount: 0,\n      });\n      expect(result.results[0]?.error).toContain("no readable user or assistant messages");\n      expect(harness.commands).toHaveLength(0);\n    }),\n  );\n\n  it.effect(\n    "prefers the project's configured Codex instance when several accounts share one history store",\n''',
+          )
+
+          replace_once(
+              "apps/web/src/components/CommandPalette.logic.ts",
+              '''    readonly status: "imported" | "already-imported" | "transcript-only" | "failed";\n''',
+              '''    readonly status: "imported" | "already-imported" | "transcript-only" | "skipped" | "failed";\n''',
+          )
+          replace_once(
+              "apps/web/src/components/CommandPalette.logic.ts",
+              '''      case "already-imported":\n        alreadyImportedCount += 1;\n        break;\n      case "failed":\n''',
+              '''      case "already-imported":\n        alreadyImportedCount += 1;\n        break;\n      case "skipped":\n        break;\n      case "failed":\n''',
+          )
+
+          replace_once(
+              "apps/web/src/components/CommandPalette.logic.test.ts",
+              '''  it("summarizes successful, degraded, duplicate, and failed imports", () => {\n''',
+              '''  it("summarizes successful, degraded, skipped, duplicate, and failed imports", () => {\n''',
+          )
+          replace_once(
+              "apps/web/src/components/CommandPalette.logic.test.ts",
+              '''        { status: "already-imported" },\n        { status: "failed" },\n''',
+              '''        { status: "already-imported" },\n        { status: "skipped" },\n        { status: "failed" },\n''',
+          )
+
+          replace_once(
+              "apps/web/src/components/ThreadImportDialog.tsx",
+              '''    case "transcript-only":\n      return `Imported ${result.importedMessageCount} message${result.importedMessageCount === 1 ? "" : "s"}; resume unavailable`;\n    case "failed":\n''',
+              '''    case "transcript-only":\n      return `Imported ${result.importedMessageCount} message${result.importedMessageCount === 1 ? "" : "s"}; resume unavailable`;\n    case "skipped":\n      return result.error ? `Skipped — ${result.error}` : "Skipped";\n    case "failed":\n''',
+          )
+          replace_once(
+              "apps/web/src/components/ThreadImportDialog.tsx",
+              '''                          result.status === "failed"\n                            ? "text-destructive"\n                            : result.status === "transcript-only"\n                              ? "text-amber-700 dark:text-amber-400"\n                              : "text-emerald-700 dark:text-emerald-400"\n''',
+              '''                          result.status === "failed"\n                            ? "text-destructive"\n                            : result.status === "transcript-only"\n                              ? "text-amber-700 dark:text-amber-400"\n                              : result.status === "skipped"\n                                ? "text-muted-foreground"\n                                : "text-emerald-700 dark:text-emerald-400"\n''',
+          )
+
+      - name: Format patched files
+        run: |
+          pnpm exec vp fmt \
+            packages/contracts/src/threadImports.ts \
+            apps/server/src/threadImport/ThreadImportService.ts \
+            apps/server/src/threadImport/ThreadImportService.test.ts \
+            apps/web/src/components/CommandPalette.logic.ts \
+            apps/web/src/components/CommandPalette.logic.test.ts \
+            apps/web/src/components/ThreadImportDialog.tsx
+
+      - name: Focused server import tests
+        run: pnpm --filter @t3tools/server exec vp test run src/threadImport/ThreadImportService.test.ts
+
+      - name: Focused web import-summary tests
+        run: pnpm --filter @t3tools/web exec vp test run src/components/CommandPalette.logic.test.ts
+
+      - name: Server and web typechecks
+        run: |
+          pnpm --filter @t3tools/server typecheck
+          pnpm --filter @t3tools/web typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          git status --short
+
+      - name: Stage validated Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/import-ux-blobs
+          : > /tmp/import-ux-blobs/manifest.txt
+          for file in \
+            packages/contracts/src/threadImports.ts \
+            apps/server/src/threadImport/ThreadImportService.ts \
+            apps/server/src/threadImport/ThreadImportService.test.ts \
+            apps/web/src/components/CommandPalette.logic.ts \
+            apps/web/src/components/CommandPalette.logic.test.ts \
+            apps/web/src/components/ThreadImportDialog.tsx
+          do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/import-ux-blobs/manifest.txt
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: import-stale-history-ux-blobs
+          path: /tmp/import-ux-blobs/manifest.txt
+          retention-days: 1
