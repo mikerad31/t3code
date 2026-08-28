@@ -21,19 +21,43 @@ jobs:
       - name: Fetch preserved quota branch
         run: git fetch origin feat/codex-quota-dashboard
 
-      - name: Attempt three-way quota merge
+      - name: Print exact three-way conflict blocks
         run: |
           set +e
           git merge --no-commit --no-ff origin/feat/codex-quota-dashboard
           merge_status=$?
           set -e
           echo "merge_status=$merge_status"
-          echo "=== MERGE BASE ==="
-          git merge-base HEAD origin/feat/codex-quota-dashboard
-          echo "=== STATUS ==="
-          git status --short
-          echo "=== UNMERGED FILES ==="
-          git diff --name-only --diff-filter=U
-          echo "=== CONFLICT MARKERS ==="
-          git grep -n '^<<<<<<<\|^=======\|^>>>>>>>' -- ':!pnpm-lock.yaml' || true
+          python - <<'PY'
+          from pathlib import Path
+
+          files = [
+              "apps/server/src/auth/RpcAuthorization.ts",
+              "apps/server/src/provider/Drivers/CodexDriver.ts",
+              "apps/server/src/provider/ProviderDriver.ts",
+              "apps/server/src/ws.ts",
+              "packages/contracts/src/rpc.ts",
+          ]
+          for name in files:
+              text = Path(name).read_text(encoding="utf-8")
+              print(f"\n===== {name} =====")
+              pos = 0
+              block = 0
+              while True:
+                  start = text.find("<<<<<<< HEAD", pos)
+                  if start < 0:
+                      break
+                  end_marker = text.find(">>>>>>> origin/feat/codex-quota-dashboard", start)
+                  if end_marker < 0:
+                      raise SystemExit(f"unterminated conflict in {name}")
+                  end = text.find("\n", end_marker)
+                  if end < 0:
+                      end = len(text)
+                  else:
+                      end += 1
+                  block += 1
+                  print(f"--- conflict {block} ---")
+                  print(text[start:end])
+                  pos = end
+          PY
           exit $merge_status
