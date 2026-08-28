@@ -56,6 +56,24 @@ type LogicalSidebarProject = SidebarProject & {
   }[];
 };
 
+export function nextCollapsedProjectSectionKeys(input: {
+  projectKeys: readonly string[];
+  collapsedProjectKeys: readonly string[];
+}): string[] {
+  const projectKeys = [...new Set(input.projectKeys)];
+  if (projectKeys.length === 0) return [...input.collapsedProjectKeys];
+
+  const projectKeySet = new Set(projectKeys);
+  const collapsedProjectKeySet = new Set(input.collapsedProjectKeys);
+  const allCollapsed = projectKeys.every((projectKey) => collapsedProjectKeySet.has(projectKey));
+
+  if (allCollapsed) {
+    return input.collapsedProjectKeys.filter((projectKey) => !projectKeySet.has(projectKey));
+  }
+
+  return [...new Set([...input.collapsedProjectKeys, ...projectKeys])];
+}
+
 export interface SidebarProjectThreadSection<TProject, TThread> {
   project: TProject;
   pinnedThreads: TThread[];

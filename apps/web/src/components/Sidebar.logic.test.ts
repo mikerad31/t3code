@@ -17,6 +17,7 @@ import {
   isContextMenuPointerDown,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
+  nextCollapsedProjectSectionKeys,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
@@ -1781,5 +1782,34 @@ describe("buildSidebarProjectThreadSections", () => {
     expect(result.ungroupedThreads.activeThreads.map((thread) => thread.id)).toEqual([
       "active-orphan",
     ]);
+  });
+});
+
+describe("nextCollapsedProjectSectionKeys", () => {
+  it("collapses every visible project when any visible project is expanded", () => {
+    expect(
+      nextCollapsedProjectSectionKeys({
+        projectKeys: ["a", "b", "c"],
+        collapsedProjectKeys: ["b", "stale"],
+      }),
+    ).toEqual(["b", "stale", "a", "c"]);
+  });
+
+  it("expands every visible project when all visible projects are collapsed", () => {
+    expect(
+      nextCollapsedProjectSectionKeys({
+        projectKeys: ["a", "b"],
+        collapsedProjectKeys: ["stale", "a", "b"],
+      }),
+    ).toEqual(["stale"]);
+  });
+
+  it("does nothing when there are no visible projects", () => {
+    expect(
+      nextCollapsedProjectSectionKeys({
+        projectKeys: [],
+        collapsedProjectKeys: ["existing"],
+      }),
+    ).toEqual(["existing"]);
   });
 });

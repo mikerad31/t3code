@@ -37,6 +37,7 @@ import {
   AlarmClockOffIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronsUpDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -132,6 +133,7 @@ import {
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
+  nextCollapsedProjectSectionKeys,
   orderItemsByPreferredIds,
   planPinnedReorder,
   resolveAdjacentThreadId,
@@ -1730,41 +1732,95 @@ function SidebarProjectSectionHeader(props: {
   expanded: boolean;
   threadCount: number;
   onToggle: () => void;
+  onCreateThread: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onImportConversations: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onOpenSettings: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
+  const actionClassName =
+    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring";
+
   return (
-    <button
-      type="button"
-      data-thread-selection-safe
-      aria-expanded={props.expanded}
-      aria-label={`${props.expanded ? "Collapse" : "Expand"} ${props.project.displayName}`}
-      onClick={props.onToggle}
-      className="group/project-section flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <ChevronDownIcon
-        aria-hidden
-        className={cn(
-          "size-3.5 shrink-0 text-sidebar-muted-foreground/70 transition-transform",
-          !props.expanded && "-rotate-90",
-        )}
-      />
-      <ProjectFavicon
-        environmentId={props.project.environmentId}
-        cwd={props.project.workspaceRoot}
-        faviconPath={props.project.faviconPath}
-        className="size-4 shrink-0"
-      />
-      <span className="min-w-0 flex-1 truncate text-xs font-semibold text-sidebar-muted-foreground group-hover/project-section:text-sidebar-foreground">
-        {props.project.displayName}
-      </span>
-      {props.project.groupedProjectCount > 1 ? (
-        <span className="shrink-0 text-[10px] text-sidebar-muted-foreground/45">
-          {props.project.groupedProjectCount} roots
+    <div className="group/project-section relative" data-thread-selection-safe>
+      <button
+        type="button"
+        aria-expanded={props.expanded}
+        aria-label={`${props.expanded ? "Collapse" : "Expand"} ${props.project.displayName}`}
+        onClick={props.onToggle}
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[5.25rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 text-sidebar-muted-foreground/70 transition-transform",
+            !props.expanded && "-rotate-90",
+          )}
+        />
+        <ProjectFavicon
+          environmentId={props.project.environmentId}
+          cwd={props.project.workspaceRoot}
+          faviconPath={props.project.faviconPath}
+          className="size-4 shrink-0"
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-sidebar-muted-foreground group-hover/project-section:text-sidebar-foreground">
+          {props.project.displayName}
         </span>
-      ) : null}
-      <span className="min-w-4 shrink-0 text-right text-[10px] tabular-nums text-sidebar-muted-foreground/45">
-        {props.threadCount}
-      </span>
-    </button>
+        {props.project.groupedProjectCount > 1 ? (
+          <span className="shrink-0 text-[10px] text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
+            {props.project.groupedProjectCount} roots
+          </span>
+        ) : null}
+        <span className="min-w-4 shrink-0 text-right text-[10px] tabular-nums text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
+          {props.threadCount}
+        </span>
+      </button>
+      <div className="pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:pointer-events-auto max-sm:opacity-100">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={actionClassName}
+                aria-label={`New thread in ${props.project.displayName}`}
+                onClick={props.onCreateThread}
+              />
+            }
+          >
+            <SquarePenIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">New thread</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={actionClassName}
+                aria-label={`Import conversations into ${props.project.displayName}`}
+                onClick={props.onImportConversations}
+              />
+            }
+          >
+            <DownloadIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Import conversations</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={actionClassName}
+                aria-label={`Project settings for ${props.project.displayName}`}
+                onClick={props.onOpenSettings}
+              />
+            }
+          >
+            <SettingsIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Project settings</TooltipPopup>
+        </Tooltip>
+      </div>
+    </div>
   );
 }
 
@@ -2041,6 +2097,21 @@ export default function Sidebar() {
     },
     [setCollapsedProjectSectionKeys],
   );
+  const projectSectionKeys = useMemo(
+    () => projectGroups.map((project) => project.projectKey),
+    [projectGroups],
+  );
+  const allProjectSectionsCollapsed =
+    projectSectionKeys.length > 0 &&
+    projectSectionKeys.every((projectKey) => collapsedProjectSectionKeySet.has(projectKey));
+  const toggleAllProjectSections = useCallback(() => {
+    setCollapsedProjectSectionKeys((current) =>
+      nextCollapsedProjectSectionKeys({
+        projectKeys: projectSectionKeys,
+        collapsedProjectKeys: current,
+      }),
+    );
+  }, [projectSectionKeys, setCollapsedProjectSectionKeys]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -2097,6 +2168,29 @@ export default function Sidebar() {
       setThreadImportProject(projectGroup);
     },
     [],
+  );
+  const handleCreateProjectThread = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isMobile) setOpenMobile(false);
+      void settlePromise(() =>
+        newThreadContext.handleNewThread(
+          scopeProjectRef(projectGroup.environmentId, projectGroup.id),
+        ),
+      ).then((result) => {
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Could not create thread in ${projectGroup.displayName}`,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      });
+    },
+    [isMobile, newThreadContext, setOpenMobile],
   );
 
   // Settled threads stay in the live shell stream (settled ≠ archived), so
@@ -3774,6 +3868,37 @@ export default function Sidebar() {
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+                {scopedProjectGroup === null && projectGroups.length > 1 ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          onClick={toggleAllProjectSections}
+                          type="button"
+                          aria-label={
+                            allProjectSectionsCollapsed
+                              ? "Expand all projects"
+                              : "Collapse all projects"
+                          }
+                        />
+                      }
+                    >
+                      <ChevronsUpDownIcon
+                        className={cn(
+                          "transition-transform",
+                          allProjectSectionsCollapsed && "rotate-90",
+                        )}
+                      />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">
+                      {allProjectSectionsCollapsed
+                        ? "Expand all projects"
+                        : "Collapse all projects"}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -4075,6 +4200,15 @@ export default function Sidebar() {
                             expanded={sectionExpanded}
                             threadCount={threadCount}
                             onToggle={() => toggleProjectSection(section.project.projectKey)}
+                            onCreateThread={(event) =>
+                              handleCreateProjectThread(event, section.project)
+                            }
+                            onImportConversations={(event) =>
+                              handleImportConversations(event, section.project)
+                            }
+                            onOpenSettings={(event) =>
+                              void handleProjectSettings(event, section.project)
+                            }
                           />
                           {sectionExpanded ? (
                             <ul
