@@ -1,0 +1,140 @@
+name: Validate sidebar project header density
+
+on:
+  push:
+    branches:
+      - validate/sidebar-project-header-density-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply product patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/web/src/components/Sidebar.tsx")
+          text = path.read_text()
+
+          def replace(old: str, new: str, expected: int = 1) -> None:
+              global text
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"expected {expected} match(es), found {count}: {old[:90]!r}")
+              text = text.replace(old, new)
+
+          replace(
+              '''  DownloadIcon,\n  FolderIcon,''',
+              '''  DownloadIcon,\n  EllipsisIcon,\n  FolderIcon,''',
+          )
+          replace(
+              '''import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";''',
+              '''import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";''',
+          )
+
+          replace(
+              '''  onCreateThread: (event: ReactMouseEvent<HTMLButtonElement>) => void;\n  onImportConversations: (event: ReactMouseEvent<HTMLButtonElement>) => void;\n  onOpenSettings: (event: ReactMouseEvent<HTMLButtonElement>) => void;\n}) {\n  const actionClassName =\n    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring";''',
+              '''  onCreateThread: (event: ReactMouseEvent<HTMLElement>) => void;\n  onImportConversations: (event: ReactMouseEvent<HTMLElement>) => void;\n  onOpenSettings: (event: ReactMouseEvent<HTMLElement>) => void;\n}) {\n  const [moreMenuOpen, setMoreMenuOpen] = useState(false);\n  const actionClassName =\n    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring max-sm:size-8";''',
+          )
+
+          replace(
+              '''className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[5.25rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"''',
+              '''className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[3.5rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring max-sm:pr-[4.5rem]"''',
+          )
+
+          replace(
+              '''      <div className="pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:pointer-events-auto max-sm:opacity-100">''',
+              '''      <div\n        className={cn(\n          "pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:right-0 max-sm:top-0 max-sm:pointer-events-auto max-sm:opacity-100",\n          moreMenuOpen && "pointer-events-auto opacity-100",\n        )}\n      >''',
+          )
+
+          replace(
+              '''        <Tooltip>\n          <TooltipTrigger\n            render={\n              <button\n                type="button"\n                className={actionClassName}\n                aria-label={`Import conversations into ${props.project.displayName}`}\n                onClick={props.onImportConversations}\n              />\n            }\n          >\n            <DownloadIcon className="size-3.5" />\n          </TooltipTrigger>\n          <TooltipPopup side="top">Import conversations</TooltipPopup>\n        </Tooltip>\n        <Tooltip>\n          <TooltipTrigger\n            render={\n              <button\n                type="button"\n                className={actionClassName}\n                aria-label={`Project settings for ${props.project.displayName}`}\n                onClick={props.onOpenSettings}\n              />\n            }\n          >\n            <SettingsIcon className="size-3.5" />\n          </TooltipTrigger>\n          <TooltipPopup side="top">Project settings</TooltipPopup>\n        </Tooltip>''',
+              '''        <Menu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>\n          <MenuTrigger\n            render={\n              <button\n                type="button"\n                className={actionClassName}\n                aria-label={`More actions for ${props.project.displayName}`}\n              />\n            }\n          >\n            <EllipsisIcon className="size-3.5" />\n          </MenuTrigger>\n          <MenuPopup align="end" side="bottom" sideOffset={4} className="min-w-44">\n            <MenuItem\n              render={<button type="button" />}\n              closeOnClick\n              onClick={props.onImportConversations}\n            >\n              <DownloadIcon />\n              <span>Import conversations</span>\n            </MenuItem>\n            <MenuItem\n              render={<button type="button" />}\n              closeOnClick\n              onClick={props.onOpenSettings}\n            >\n              <SettingsIcon />\n              <span>Project settings</span>\n            </MenuItem>\n          </MenuPopup>\n        </Menu>''',
+          )
+
+          replace(
+              '''    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      setProjectScopeMenuOpen(false);\n      if (isMobile) {''',
+              '''    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      setProjectScopeMenuOpen(false);\n      if (isMobile) {''',
+          )
+          replace(
+              '''    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      setProjectScopeMenuOpen(false);\n      setThreadImportProject(projectGroup);''',
+              '''    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      setProjectScopeMenuOpen(false);\n      setThreadImportProject(projectGroup);''',
+          )
+          replace(
+              '''    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      if (isMobile) setOpenMobile(false);''',
+              '''    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {\n      event.preventDefault();\n      event.stopPropagation();\n      if (isMobile) setOpenMobile(false);''',
+          )
+
+          path.write_text(text)
+          PY
+
+      - name: Format product file
+        run: pnpm exec vp fmt apps/web/src/components/Sidebar.tsx
+
+      - name: Assert exact product surface
+        run: |
+          printf '%s\n' 'apps/web/src/components/Sidebar.tsx' > /tmp/expected-files.txt
+          git diff --name-only c0f8c65e47f928395fa2c7015c51349a5684318f \
+            | grep -v '^.github/workflows/tmp-sidebar-project-header-density-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused sidebar regression
+        run: pnpm --filter @t3tools/web exec vp test run src/components/Sidebar.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only c0f8c65e47f928395fa2c7015c51349a5684318f \
+            | grep -v '^.github/workflows/tmp-sidebar-project-header-density-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-project-header-density-blobs
+          file='apps/web/src/components/Sidebar.tsx'
+          base64 -w0 "$file" > /tmp/blob-content.b64
+          jq -n --rawfile content /tmp/blob-content.b64 \
+            '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+          printf '%s %s\n' "$sha" "$file" | tee /tmp/sidebar-project-header-density-blobs/manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-project-header-density-v1-blobs
+          path: /tmp/sidebar-project-header-density-blobs/manifest.txt
+          retention-days: 1
