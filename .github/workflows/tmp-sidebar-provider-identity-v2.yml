@@ -1,0 +1,194 @@
+name: Validate sidebar provider identity v2
+
+on:
+  push:
+    branches:
+      - validate/sidebar-provider-identity-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply product patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_count(path: str, old: str, new: str, expected: int = 1) -> None:
+              target = Path(path)
+              text = target.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} match(es), found {count}")
+              target.write_text(text.replace(old, new))
+
+          replace_count(
+              "apps/web/src/providerInstances.ts",
+              '''export function shouldShowInstanceBadge(\n  entry: ProviderInstanceEntry,\n  entries: Iterable<ProviderInstanceEntry>,\n): boolean {\n  if (entry.accentColor) return true;\n  let sharedDriverCount = 0;\n  for (const candidate of entries) {\n    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) return true;\n  }\n  return false;\n}\n\nexport function normalizeProviderAccentColor''',
+              '''export function shouldShowInstanceBadge(\n  entry: ProviderInstanceEntry,\n  entries: Iterable<ProviderInstanceEntry>,\n): boolean {\n  if (entry.accentColor) return true;\n  let sharedDriverCount = 0;\n  for (const candidate of entries) {\n    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) return true;\n  }\n  return false;\n}\n\nexport interface ProviderInstanceIdentity {\n  readonly label: string;\n  readonly shouldDisplay: boolean;\n}\n\n/**\n * Resolve the compact identity that disambiguates sibling instances of the\n * same provider driver. Single-instance setups stay visually quiet; when\n * several Codex accounts share the generic driver label, their stable server\n * order becomes A1 / A2 / A3 so the sidebar and account controls remain\n * scannable without exposing routing slugs. Explicitly configured names win.\n */\nexport function resolveProviderInstanceIdentity(\n  entry: ProviderInstanceEntry,\n  entries: Iterable<ProviderInstanceEntry>,\n): ProviderInstanceIdentity {\n  const siblings = [...entries].filter((candidate) => candidate.driverKind === entry.driverKind);\n  if (siblings.length <= 1) {\n    return { label: entry.displayName, shouldDisplay: false };\n  }\n\n  if (String(entry.driverKind) !== "codex") {\n    return { label: entry.displayName, shouldDisplay: true };\n  }\n\n  const configured = entry.snapshot.displayName?.trim();\n  const kindLabel = driverKindLabel(entry.driverKind);\n  if (configured && configured !== kindLabel) {\n    return { label: configured, shouldDisplay: true };\n  }\n\n  const ordinal = siblings.findIndex((candidate) => candidate.instanceId === entry.instanceId);\n  return {\n    label: ordinal >= 0 ? `A${ordinal + 1}` : entry.displayName,\n    shouldDisplay: true,\n  };\n}\n\nexport function normalizeProviderAccentColor''',
+          )
+
+          replace_count(
+              "apps/web/src/providerInstances.test.ts",
+              '''  resolveDefaultProviderModelSelection,\n  resolveSelectableProviderInstance,\n  resolveProviderDriverKindForInstanceSelection,''',
+              '''  resolveDefaultProviderModelSelection,\n  resolveProviderInstanceIdentity,\n  resolveSelectableProviderInstance,\n  resolveProviderDriverKindForInstanceSelection,''',
+          )
+
+          replace_count(
+              "apps/web/src/providerInstances.test.ts",
+              '''describe("deriveProviderEntriesByEnvironment", () => {''',
+              '''describe("resolveProviderInstanceIdentity", () => {\n  it("labels generic sibling Codex instances A1, A2, and A3", () => {\n    const entries = deriveProviderInstanceEntries([\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex", displayName: "Codex" }),\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_a2", displayName: "Codex" }),\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_a3", displayName: "Codex" }),\n    ]);\n\n    expect(entries.map((entry) => resolveProviderInstanceIdentity(entry, entries))).toEqual([\n      { label: "A1", shouldDisplay: true },\n      { label: "A2", shouldDisplay: true },\n      { label: "A3", shouldDisplay: true },\n    ]);\n  });\n\n  it("preserves an explicit account name when sibling instances exist", () => {\n    const entries = deriveProviderInstanceEntries([\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex", displayName: "Codex" }),\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_work", displayName: "Work" }),\n    ]);\n\n    expect(resolveProviderInstanceIdentity(entries[1]!, entries)).toEqual({\n      label: "Work",\n      shouldDisplay: true,\n    });\n  });\n\n  it("stays visually quiet when a driver has only one configured instance", () => {\n    const [entry] = deriveProviderInstanceEntries([\n      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex", displayName: "Codex" }),\n    ]);\n\n    expect(entry && resolveProviderInstanceIdentity(entry, [entry])).toEqual({\n      label: "Codex",\n      shouldDisplay: false,\n    });\n  });\n});\n\ndescribe("deriveProviderEntriesByEnvironment", () => {''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''  deriveProviderEntriesByEnvironment,\n  shouldShowInstanceBadge,\n  type ProviderInstanceEntry,''',
+              '''  deriveProviderEntriesByEnvironment,\n  resolveProviderInstanceIdentity,\n  shouldShowInstanceBadge,\n  type ProviderInstanceEntry,''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''  providerEntry,\n  showInstanceBadge,\n  modelInstanceId,\n  modelLabel,''',
+              '''  providerEntry,\n  providerIdentityLabel,\n  showInstanceBadge,\n  showProviderIdentity,\n  modelInstanceId,\n  modelLabel,''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''  providerEntry: ProviderInstanceEntry | null;\n  showInstanceBadge: boolean;\n  modelInstanceId: string;''',
+              '''  providerEntry: ProviderInstanceEntry | null;\n  providerIdentityLabel: string;\n  showInstanceBadge: boolean;\n  showProviderIdentity: boolean;\n  modelInstanceId: string;''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''                displayName={\n                  providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId\n                }''',
+              '''                displayName={providerIdentityLabel}''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''                {showInstanceBadge && providerEntry\n                  ? `${modelLabel} · ${providerEntry.displayName}`\n                  : modelLabel}''',
+              '''                {showProviderIdentity ? `${modelLabel} · ${providerIdentityLabel}` : modelLabel}''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''  const showInstanceBadge =\n    providerEntry !== null &&\n    shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());\n  const selectedModel = providerEntry?.models.find(''',
+              '''  const showInstanceBadge =\n    providerEntry !== null &&\n    shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());\n  const providerIdentity =\n    providerEntry !== null\n      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())\n      : null;\n  const providerIdentityLabel =\n    providerIdentity?.label ??\n    providerEntry?.displayName ??\n    thread.session?.providerName ??\n    modelInstanceId;\n  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;\n  const selectedModel = providerEntry?.models.find(''',
+              expected=2,
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''      providerEntry={providerEntry}\n      showInstanceBadge={showInstanceBadge}\n      modelInstanceId={modelInstanceId}''',
+              '''      providerEntry={providerEntry}\n      providerIdentityLabel={providerIdentityLabel}\n      showInstanceBadge={showInstanceBadge}\n      showProviderIdentity={showProviderIdentity}\n      modelInstanceId={modelInstanceId}''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''            {title}\n            {pinIndicator}\n            {terminalStatusIcon}''',
+              '''            {title}\n            {driverKind && showProviderIdentity ? (\n              <span\n                role="img"\n                aria-label={`Provider ${providerIdentityLabel}`}\n                className="inline-flex shrink-0 items-center"\n              >\n                <ProviderInstanceIcon\n                  driverKind={driverKind}\n                  displayName={providerIdentityLabel}\n                  accentColor={providerEntry?.accentColor}\n                  showBadge\n                  iconClassName="size-3.5 opacity-60"\n                  badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"\n                />\n              </span>\n            ) : null}\n            {pinIndicator}\n            {terminalStatusIcon}''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''                      displayName={\n                        providerEntry?.displayName ??\n                        thread.session?.providerName ??\n                        modelInstanceId\n                      }''',
+              '''                      displayName={providerIdentityLabel}''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''          <span className="min-w-0 flex-1 truncate">{thread.title}</span>\n          <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">''',
+              '''          <span className="min-w-0 flex-1 truncate">{thread.title}</span>\n          {providerEntry?.driverKind && showProviderIdentity ? (\n            <span\n              role="img"\n              aria-label={`Provider ${providerIdentityLabel}`}\n              className="inline-flex shrink-0 items-center"\n            >\n              <ProviderInstanceIcon\n                driverKind={providerEntry.driverKind}\n                displayName={providerIdentityLabel}\n                accentColor={providerEntry.accentColor}\n                showBadge\n                iconClassName="size-3.5 opacity-60"\n                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"\n              />\n            </span>\n          ) : null}\n          <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">''',
+          )
+
+          replace_count(
+              "apps/web/src/components/Sidebar.tsx",
+              '''          providerEntry={providerEntry}\n          showInstanceBadge={showInstanceBadge}\n          modelInstanceId={modelInstanceId}''',
+              '''          providerEntry={providerEntry}\n          providerIdentityLabel={providerIdentityLabel}\n          showInstanceBadge={showInstanceBadge}\n          showProviderIdentity={showProviderIdentity}\n          modelInstanceId={modelInstanceId}''',
+          )
+          PY
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/web/src/providerInstances.ts \
+            apps/web/src/providerInstances.test.ts \
+            apps/web/src/components/Sidebar.tsx
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/components/Sidebar.tsx
+          apps/web/src/providerInstances.test.ts
+          apps/web/src/providerInstances.ts
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          git diff --name-only 028a9fc366a8d33c940e1d1e272cc6c551b512aa \
+            | grep -v '^.github/workflows/tmp-sidebar-provider-identity-v2.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused provider identity regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/providerInstances.test.ts \
+            src/components/Sidebar.logic.test.ts \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 028a9fc366a8d33c940e1d1e272cc6c551b512aa \
+            | grep -v '^.github/workflows/tmp-sidebar-provider-identity-v2.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-provider-identity-blobs
+          : > /tmp/sidebar-provider-identity-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/sidebar-provider-identity-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-provider-identity-v2-blobs
+          path: /tmp/sidebar-provider-identity-blobs/manifest.txt
+          retention-days: 1
