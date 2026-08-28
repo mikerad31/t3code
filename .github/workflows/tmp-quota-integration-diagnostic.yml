@@ -13,6 +13,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure diagnostic Git identity
+        run: |
+          git config user.name "T3 quota integration diagnostic"
+          git config user.email "quota-integration@local.invalid"
+
       - name: Fetch preserved quota branch
         run: git fetch origin feat/codex-quota-dashboard
 
