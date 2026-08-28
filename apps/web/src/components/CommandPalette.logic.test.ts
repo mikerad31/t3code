@@ -25,12 +25,13 @@ describe("automatic project conversation import", () => {
     ).toEqual(["new-1", "new-2"]);
   });
 
-  it("summarizes successful, degraded, duplicate, and failed imports", () => {
+  it("summarizes successful, degraded, skipped, duplicate, and failed imports", () => {
     expect(
       summarizeAutoThreadImportResults([
         { status: "imported" },
         { status: "transcript-only" },
         { status: "already-imported" },
+        { status: "skipped" },
         { status: "failed" },
         { status: "imported" },
       ]),

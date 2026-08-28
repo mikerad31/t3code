@@ -407,10 +407,33 @@ describe("ThreadImportService", () => {
           interactionMode: "default",
         });
 
-        expect(result.results.map((item) => item.status)).toEqual(["failed", "imported"]);
+        expect(result.results.map((item) => item.status)).toEqual(["skipped", "imported"]);
         expect(result.results[0]?.error).toContain("simulated unreadable transcript");
         expect(harness.commands).toHaveLength(1);
       }),
+  );
+
+  it.effect("skips empty Codex transcripts without reporting a product failure", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        candidates: [sourceCandidate()],
+        read: () => Effect.succeed(sourceTranscript({ messages: [] })),
+      });
+      const scan = yield* harness.service.scan({ projectId });
+      const result = yield* harness.service.commit({
+        projectId,
+        candidateIds: [scan.candidates[0]!.candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+
+      expect(result.results[0]).toMatchObject({
+        status: "skipped",
+        importedMessageCount: 0,
+      });
+      expect(result.results[0]?.error).toContain("no readable user or assistant messages");
+      expect(harness.commands).toHaveLength(0);
+    }),
   );
 
   it.effect(

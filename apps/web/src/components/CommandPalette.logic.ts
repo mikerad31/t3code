@@ -26,7 +26,7 @@ export function selectNewThreadImportCandidateIds<TId>(
 
 export function summarizeAutoThreadImportResults(
   results: ReadonlyArray<{
-    readonly status: "imported" | "already-imported" | "transcript-only" | "failed";
+    readonly status: "imported" | "already-imported" | "transcript-only" | "skipped" | "failed";
   }>,
 ) {
   let importedCount = 0;
@@ -44,6 +44,8 @@ export function summarizeAutoThreadImportResults(
         break;
       case "already-imported":
         alreadyImportedCount += 1;
+        break;
+      case "skipped":
         break;
       case "failed":
         failedCount += 1;

@@ -55,6 +55,8 @@ function statusLabel(result: ThreadImportItemResult): string {
       return "Already imported";
     case "transcript-only":
       return `Imported ${result.importedMessageCount} message${result.importedMessageCount === 1 ? "" : "s"}; resume unavailable`;
+    case "skipped":
+      return result.error ? `Skipped — ${result.error}` : "Skipped";
     case "failed":
       return result.error ?? "Import failed";
   }
@@ -275,7 +277,9 @@ function ThreadImportTargetPanel(props: {
                             ? "text-destructive"
                             : result.status === "transcript-only"
                               ? "text-amber-700 dark:text-amber-400"
-                              : "text-emerald-700 dark:text-emerald-400"
+                              : result.status === "skipped"
+                                ? "text-muted-foreground"
+                                : "text-emerald-700 dark:text-emerald-400"
                         }`}
                       >
                         {statusLabel(result)}
