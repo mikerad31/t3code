@@ -1,0 +1,34 @@
+name: Diagnose quota integration
+
+on:
+  push:
+    branches:
+      - integrate/codex-quota-after-lifecycle
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch preserved quota branch
+        run: git fetch origin feat/codex-quota-dashboard
+
+      - name: Attempt three-way quota merge
+        run: |
+          set +e
+          git merge --no-commit --no-ff origin/feat/codex-quota-dashboard
+          merge_status=$?
+          set -e
+          echo "merge_status=$merge_status"
+          echo "=== MERGE BASE ==="
+          git merge-base HEAD origin/feat/codex-quota-dashboard
+          echo "=== STATUS ==="
+          git status --short
+          echo "=== UNMERGED FILES ==="
+          git diff --name-only --diff-filter=U
+          echo "=== CONFLICT MARKERS ==="
+          git grep -n '^<<<<<<<\|^=======\|^>>>>>>>' -- ':!pnpm-lock.yaml' || true
+          exit $merge_status
