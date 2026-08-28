@@ -1686,7 +1686,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       return yield* new ProviderAdapterProcessError({
         provider: PROVIDER,
         threadId,
-        detail: cause instanceof Error ? cause.message : String(cause),
+        detail: "Failed to release Codex session resources.",
         cause,
       });
     }
@@ -2016,6 +2016,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }
 
           session.stopResult = candidate;
+          session.routable = false;
           const stopExit = yield* Effect.exit(
             Effect.gen(function* () {
               yield* releaseSessionResources(
@@ -2050,7 +2051,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
-      Array.from(sessions.values()).filter((session) => !session.stopped),
+      Array.from(sessions.values()).filter((session) => !session.stopped && session.routable),
       (session) => session.runtime.getSession,
       { concurrency: 1 },
     );
@@ -2066,8 +2067,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   yield* Effect.acquireRelease(Effect.void, () =>
     stopAll().pipe(
-      Effect.andThen(Queue.shutdown(runtimeEventQueue)),
-      Effect.andThen(managedNativeEventLogger?.close() ?? Effect.void),
+      Effect.ensuring(
+        Queue.shutdown(runtimeEventQueue).pipe(
+          Effect.ensuring(managedNativeEventLogger?.close() ?? Effect.void),
+        ),
+      ),
       Effect.ignore,
     ),
   );
