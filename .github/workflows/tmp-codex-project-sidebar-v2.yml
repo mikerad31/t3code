@@ -32,6 +32,7 @@ jobs:
         run: |
           python .github/scripts/tmp-codex-project-sidebar-v2-logic.py
           python .github/scripts/tmp-codex-project-sidebar-v2-ui.py
+          python .github/scripts/tmp-codex-project-sidebar-v2-tooltip-fix.py
 
       - name: Format product files
         run: |
