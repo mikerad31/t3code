@@ -66,6 +66,20 @@ describe("buildThreadActionMenuItems", () => {
     expect(item).toMatchObject({ label: "Regenerating…", disabled: true });
   });
 
+  it("shows inspection actions only in chat-header menus", () => {
+    expect(allIds(baseState)).not.toContain("inspect-thread");
+    expect(allIds({ ...baseState, chatInspection: true })).toEqual(
+      expect.arrayContaining([
+        "inspect-thread",
+        "expand-all",
+        "collapse-all",
+        "copy-full-thread",
+        "export-thread-markdown",
+        "export-thread-json",
+      ]),
+    );
+  });
+
   it("marks delete as destructive and keeps it last", () => {
     const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
     expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });
