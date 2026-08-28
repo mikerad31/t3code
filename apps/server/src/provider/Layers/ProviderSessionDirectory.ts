@@ -130,7 +130,8 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       existingRuntime.providerInstanceId !== binding.providerInstanceId;
     const providerIdentityChanged = providerChanged || providerInstanceChanged;
     const providerInstanceId =
-      binding.providerInstanceId ?? (!providerIdentityChanged ? existingRuntime?.providerInstanceId : null);
+      binding.providerInstanceId ??
+      (!providerIdentityChanged ? existingRuntime?.providerInstanceId : null);
     if (providerInstanceId === null || providerInstanceId === undefined) {
       return yield* new ProviderValidationError({
         operation: "ProviderSessionDirectory.upsert",

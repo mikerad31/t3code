@@ -27,7 +27,10 @@ it.layer(NodeServices.layer)("CodexHomeLayout sqlite sidecar repair", (it) => {
 
       for (const entryName of ["goals_1.sqlite-shm", "goals_1.sqlite-wal"] as const) {
         yield* fileSystem.writeFileString(path.join(sharedHome, entryName), "shared-runtime\n");
-        yield* fileSystem.writeFileString(path.join(shadowHome, entryName), "stale-shadow-runtime\n");
+        yield* fileSystem.writeFileString(
+          path.join(shadowHome, entryName),
+          "stale-shadow-runtime\n",
+        );
       }
 
       const layout = yield* resolveCodexHomeLayout(
