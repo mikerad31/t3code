@@ -1,0 +1,83 @@
+name: Validate thread inspection UX polish
+
+on:
+  push:
+    branches:
+      - validate/thread-inspection-ux-polish-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format product file
+        run: pnpm exec vp fmt apps/web/src/hooks/useThreadActionMenu.ts
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/hooks/useThreadActionMenu.ts
+          EOF
+          git diff --name-only b1f7f038da92bc61d956cbe2cca6ddc6c2bab44f \
+            | grep -v '^.github/workflows/tmp-thread-inspection-ux-polish-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused thread action regressions
+        run: pnpm --filter @t3tools/web exec vp test run src/components/threadActionMenu.logic.test.ts src/threadExport.logic.test.ts src/threadInspectionBus.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only b1f7f038da92bc61d956cbe2cca6ddc6c2bab44f \
+            | grep -v '^.github/workflows/tmp-thread-inspection-ux-polish-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/thread-inspection-ux-polish-blobs
+          file=apps/web/src/hooks/useThreadActionMenu.ts
+          base64 -w0 "$file" > /tmp/blob-content.b64
+          jq -n --rawfile content /tmp/blob-content.b64 \
+            '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+          printf '%s %s\n' "$sha" "$file" > /tmp/thread-inspection-ux-polish-blobs/manifest.txt
+          cat /tmp/thread-inspection-ux-polish-blobs/manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thread-inspection-ux-polish-v1-blobs
+          path: /tmp/thread-inspection-ux-polish-blobs/manifest.txt
+          retention-days: 1
