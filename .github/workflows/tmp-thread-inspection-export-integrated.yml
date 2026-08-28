@@ -36,25 +36,7 @@ jobs:
 
       - name: Adapt export nullability to current type contracts
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("apps/web/src/threadExport.logic.ts")
-          text = path.read_text()
-          old = '''      `- Updated: ${thread.session.updatedAt}`,
-      thread.session.lastError ? `- Last error: ${thread.session.lastError}` : null,
-    );
-'''
-          new = '''      `- Updated: ${thread.session.updatedAt}`,
-    );
-    if (thread.session.lastError) {
-      lines.push(`- Last error: ${thread.session.lastError}`);
-    }
-'''
-          if old not in text:
-              raise SystemExit("expected session last-error export block not found")
-          path.write_text(text.replace(old, new, 1))
-          PY
+          python -c 'from pathlib import Path; p=Path("apps/web/src/threadExport.logic.ts"); s=p.read_text(); old="      `- Updated: ${thread.session.updatedAt}`,\n      thread.session.lastError ? `- Last error: ${thread.session.lastError}` : null,\n    );\n"; new="      `- Updated: ${thread.session.updatedAt}`,\n    );\n    if (thread.session.lastError) {\n      lines.push(`- Last error: ${thread.session.lastError}`);\n    }\n"; assert old in s, "expected session last-error export block not found"; p.write_text(s.replace(old,new,1))'
 
       - uses: pnpm/action-setup@v4
         with:
