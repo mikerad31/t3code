@@ -1,0 +1,181 @@
+name: Validate quota integration v2
+
+on:
+  push:
+    branches:
+      - integrate/codex-quota-after-lifecycle-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "T3 quota integration validator"
+          git config user.email "quota-integration@local.invalid"
+
+      - name: Fetch preserved quota branch
+        run: git fetch origin feat/codex-quota-dashboard
+
+      - name: Merge quota branch and resolve additive conflicts
+        shell: python
+        run: |
+          import re
+          import subprocess
+          from pathlib import Path
+
+          merge = subprocess.run(
+              ["git", "merge", "--no-commit", "--no-ff", "origin/feat/codex-quota-dashboard"],
+              check=False,
+          )
+          if merge.returncode not in (0, 1):
+              raise SystemExit(f"git merge failed unexpectedly: {merge.returncode}")
+
+          expected_conflicts = {
+              "apps/server/src/auth/RpcAuthorization.ts": 1,
+              "apps/server/src/provider/Drivers/CodexDriver.ts": 2,
+              "apps/server/src/provider/ProviderDriver.ts": 1,
+              "apps/server/src/ws.ts": 1,
+              "packages/contracts/src/rpc.ts": 2,
+          }
+          unmerged = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only", "--diff-filter=U"], text=True
+              ).splitlines()
+          )
+          if unmerged != set(expected_conflicts):
+              raise SystemExit(
+                  f"unexpected conflict set: {sorted(unmerged)}; expected {sorted(expected_conflicts)}"
+              )
+
+          conflict = re.compile(
+              r"<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> origin/feat/codex-quota-dashboard\n?",
+              re.DOTALL,
+          )
+          for filename, expected_count in expected_conflicts.items():
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              resolved, count = conflict.subn(lambda m: m.group(1) + m.group(2), text)
+              if count != expected_count:
+                  raise SystemExit(
+                      f"{filename}: resolved {count} conflict blocks; expected {expected_count}"
+                  )
+              if "<<<<<<<" in resolved or "=======" in resolved or ">>>>>>>" in resolved:
+                  raise SystemExit(f"{filename}: conflict marker remains")
+              path.write_text(resolved, encoding="utf-8")
+
+          subprocess.run(["git", "add", *expected_conflicts.keys()], check=True)
+          remaining = subprocess.check_output(
+              ["git", "diff", "--name-only", "--diff-filter=U"], text=True
+          ).strip()
+          if remaining:
+              raise SystemExit(f"unresolved merge files remain:\n{remaining}")
+
+      - name: Define and assert exact quota surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/server/src/auth/RpcAuthorization.ts
+          apps/server/src/provider/Drivers/CodexDriver.ts
+          apps/server/src/provider/Layers/CodexProvider.ts
+          apps/server/src/provider/Layers/CodexRateLimitResetCredit.ts
+          apps/server/src/provider/Layers/CodexRateLimits.test.ts
+          apps/server/src/provider/Layers/CodexRateLimits.ts
+          apps/server/src/provider/ProviderDriver.ts
+          apps/server/src/provider/consumeRateLimitResetCredit.test.ts
+          apps/server/src/provider/consumeRateLimitResetCredit.ts
+          apps/server/src/server.test.ts
+          apps/server/src/ws.ts
+          apps/web/src/components/sidebar/SidebarChrome.tsx
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.ts
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx
+          packages/client-runtime/src/state/server.ts
+          packages/contracts/src/provider.ts
+          packages/contracts/src/rpc.ts
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          BASE_SHA="$(git rev-parse HEAD^)"
+          git diff --name-only "$BASE_SHA" \
+            | grep -vF '.github/workflows/tmp-quota-integration-validation.yml' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format integrated feature files
+        run: pnpm exec vp fmt $(cat /tmp/expected-files.txt)
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused quota server regressions
+        run: |
+          pnpm --filter @t3tools/server exec vp test run \
+            src/provider/Layers/CodexRateLimits.test.ts \
+            src/provider/consumeRateLimitResetCredit.test.ts
+
+      - name: Importer and lifecycle regressions
+        run: |
+          pnpm --filter @t3tools/server exec vp test run \
+            src/threadImport/ThreadImportService.test.ts \
+            src/provider/Layers/ProviderSessionDirectory.instanceSwitch.test.ts \
+            src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Focused quota web regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          BASE_SHA="$(git rev-parse HEAD^)"
+          git diff --name-only "$BASE_SHA" \
+            | grep -vF '.github/workflows/tmp-quota-integration-validation.yml' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/quota-integration-blobs
+          : > /tmp/quota-integration-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" \
+              --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" \
+              | tee -a /tmp/quota-integration-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quota-integration-blobs-v2
+          path: /tmp/quota-integration-blobs/manifest.txt
+          retention-days: 1
