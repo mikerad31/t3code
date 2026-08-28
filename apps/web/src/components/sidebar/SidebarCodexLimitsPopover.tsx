@@ -6,6 +6,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import { AsyncResult } from "effect/unstable/reactivity";
+import {
+  deriveProviderInstanceEntries,
+  resolveProviderInstanceIdentity,
+} from "../../providerInstances";
 import { useEnvironments } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -16,7 +20,6 @@ import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
   parseCodexBankedResetCount,
   parseCodexLimitMessage,
-  resolveCodexAccountLabel,
   type ParsedCodexLimitWindow,
 } from "./SidebarCodexLimitsPopover.logic";
 
@@ -102,8 +105,6 @@ function CodexLimitProviderCard({
 }) {
   const { provider, windows } = entry;
   const displayName = entry.accountLabel;
-  const instanceDetail =
-    String(provider.instanceId) !== String(provider.driver) ? String(provider.instanceId) : null;
   const planLabel = provider.auth.label ?? provider.auth.type ?? null;
   const canUseReset = (entry.bankedResetCount ?? 0) > 0;
 
@@ -120,14 +121,7 @@ function CodexLimitProviderCard({
           badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
         />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
-            {instanceDetail ? (
-              <code className="truncate rounded bg-muted/60 px-1 py-0.5 text-[9px] text-muted-foreground">
-                {instanceDetail}
-              </code>
-            ) : null}
-          </div>
+          <div className="truncate text-sm font-medium text-foreground">{displayName}</div>
           <div className="truncate text-[11px] text-muted-foreground">
             {[planLabel, showEnvironment ? entry.environmentLabel : null]
               .filter(Boolean)
@@ -205,32 +199,29 @@ export function SidebarCodexLimitsPopover() {
     {},
   );
 
-  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {
-    const discovered = environments.flatMap((environment) =>
-      (environment.serverConfig?.providers ?? []).flatMap((provider) =>
-        String(provider.driver) === "codex"
-          ? [
-              {
-                environmentId: environment.environmentId,
-                environmentLabel: environment.label,
-                provider,
-                windows: parseCodexLimitMessage(provider.message),
-                bankedResetCount: parseCodexBankedResetCount(provider.message),
-              },
-            ]
-          : [],
-      ),
-    );
-
-    return discovered.map((entry, ordinal) => ({
-      ...entry,
-      accountLabel: resolveCodexAccountLabel({
-        displayName: entry.provider.displayName,
-        ordinal,
-        accountCount: discovered.length,
+  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(
+    () =>
+      environments.flatMap((environment) => {
+        const providerEntries = deriveProviderInstanceEntries(
+          environment.serverConfig?.providers ?? [],
+        );
+        return providerEntries.flatMap((providerEntry) => {
+          if (String(providerEntry.driverKind) !== "codex") return [];
+          const provider = providerEntry.snapshot;
+          return [
+            {
+              environmentId: environment.environmentId,
+              environmentLabel: environment.label,
+              accountLabel: resolveProviderInstanceIdentity(providerEntry, providerEntries).label,
+              provider,
+              windows: parseCodexLimitMessage(provider.message),
+              bankedResetCount: parseCodexBankedResetCount(provider.message),
+            },
+          ];
+        });
       }),
-    }));
-  }, [environments]);
+    [environments],
+  );
 
   const environmentIds = useMemo(
     () => [...new Set(entries.map((entry) => entry.environmentId))],
