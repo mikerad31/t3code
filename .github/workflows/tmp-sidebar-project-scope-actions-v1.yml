@@ -1,0 +1,108 @@
+name: Validate sidebar project scope actions
+
+on:
+  push:
+    branches:
+      - validate/sidebar-project-scope-actions-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply product patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/web/src/components/Sidebar.tsx")
+          text = path.read_text()
+
+          old = '''                      {projectGroups.map((project) => {\n                        const scopeKey = project.projectKey;\n                        return (\n                          <MenuRadioItem\n                            key={scopeKey}\n                            value={scopeKey}\n                            closeOnClick\n                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"\n                          >\n                            <ProjectFavicon\n                              environmentId={project.environmentId}\n                              cwd={project.workspaceRoot}\n                              faviconPath={project.faviconPath}\n                              className="size-4 shrink-0"\n                            />\n                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>\n                            <Button\n                              size="icon-xs"\n                              variant="ghost-muted"\n                              aria-label={`Import conversations into ${project.displayName}`}\n                              title={`Import conversations into ${project.displayName}`}\n                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"\n                              onPointerDown={(event) => event.stopPropagation()}\n                              onClick={(event) => {\n                                handleImportConversations(event, project);\n                              }}\n                            >\n                              <DownloadIcon className="size-3.5" />\n                            </Button>\n                            <Button\n                              size="icon-xs"\n                              variant="ghost-muted"\n                              aria-label={`Project settings for ${project.displayName}`}\n                              title={`Project settings for ${project.displayName}`}\n                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"\n                              onPointerDown={(event) => event.stopPropagation()}\n                              onClick={(event) => {\n                                void handleProjectSettings(event, project);\n                              }}\n                            >\n                              <SettingsIcon className="size-3.5" />\n                            </Button>\n                          </MenuRadioItem>\n                        );\n                      })}'''
+          new = '''                      {projectGroups.map((project) => (\n                        <MenuRadioItem\n                          key={project.projectKey}\n                          value={project.projectKey}\n                          closeOnClick\n                          className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"\n                        >\n                          <ProjectFavicon\n                            environmentId={project.environmentId}\n                            cwd={project.workspaceRoot}\n                            faviconPath={project.faviconPath}\n                            className="size-4 shrink-0"\n                          />\n                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>\n                        </MenuRadioItem>\n                      ))}'''
+          if text.count(old) != 1:
+              raise SystemExit(f"project picker action seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = '''                </Menu>\n                {scopedProjectGroup === null && projectGroups.length > 1 ? ('''
+          new = '''                </Menu>\n                {scopedProjectGroup !== null ? (\n                  <Menu>\n                    <MenuTrigger\n                      render={\n                        <SidebarMenuButton\n                          size="icon"\n                          type="button"\n                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"\n                          aria-label={`Project actions for ${scopedProjectGroup.displayName}`}\n                        />\n                      }\n                    >\n                      <EllipsisIcon />\n                      <span\n                        className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"\n                        aria-hidden="true"\n                      />\n                    </MenuTrigger>\n                    <MenuPopup align="end" className="min-w-44">\n                      <MenuItem\n                        render={<button type="button" />}\n                        closeOnClick\n                        onClick={(event) => handleImportConversations(event, scopedProjectGroup)}\n                      >\n                        <DownloadIcon />\n                        <span>Import conversations</span>\n                      </MenuItem>\n                      <MenuItem\n                        render={<button type="button" />}\n                        closeOnClick\n                        onClick={(event) => void handleProjectSettings(event, scopedProjectGroup)}\n                      >\n                        <SettingsIcon />\n                        <span>Project settings</span>\n                      </MenuItem>\n                    </MenuPopup>\n                  </Menu>\n                ) : null}\n                {scopedProjectGroup === null && projectGroups.length > 1 ? ('''
+          if text.count(old) != 1:
+              raise SystemExit(f"scoped project action insertion seam: expected one match, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          if 'title={`Import conversations into ${project.displayName}`}' in text:
+              raise SystemExit("native import title remained in project picker")
+          if 'title={`Project settings for ${project.displayName}`}' in text:
+              raise SystemExit("native settings title remained in project picker")
+
+          path.write_text(text)
+          PY
+
+      - name: Format product file
+        run: pnpm exec vp fmt apps/web/src/components/Sidebar.tsx
+
+      - name: Assert exact product surface
+        run: |
+          printf '%s\n' 'apps/web/src/components/Sidebar.tsx' > /tmp/expected-files.txt
+          git diff --name-only 7624cb5af7acf5b45497a2f4f1028b92807f463b \
+            | grep -v '^.github/workflows/tmp-sidebar-project-scope-actions-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused sidebar regression
+        run: pnpm --filter @t3tools/web exec vp test run src/components/Sidebar.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 7624cb5af7acf5b45497a2f4f1028b92807f463b \
+            | grep -v '^.github/workflows/tmp-sidebar-project-scope-actions-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-project-scope-actions-blobs
+          file='apps/web/src/components/Sidebar.tsx'
+          base64 -w0 "$file" > /tmp/blob-content.b64
+          jq -n --rawfile content /tmp/blob-content.b64 \
+            '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+          printf '%s %s\n' "$sha" "$file" | tee /tmp/sidebar-project-scope-actions-blobs/manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-project-scope-actions-v1-blobs
+          path: /tmp/sidebar-project-scope-actions-blobs/manifest.txt
+          retention-days: 1
