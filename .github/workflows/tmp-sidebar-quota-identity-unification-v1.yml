@@ -1,0 +1,164 @@
+name: Validate sidebar quota identity unification
+
+on:
+  push:
+    branches:
+      - validate/sidebar-quota-identity-unification-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply product patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              target.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx",
+              '''import { useEnvironments } from "../../state/environments";\nimport { serverEnvironment } from "../../state/server";''',
+              '''import {\n  deriveProviderInstanceEntries,\n  resolveProviderInstanceIdentity,\n} from "../../providerInstances";\nimport { useEnvironments } from "../../state/environments";\nimport { serverEnvironment } from "../../state/server";''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx",
+              '''  parseCodexBankedResetCount,\n  parseCodexLimitMessage,\n  resolveCodexAccountLabel,\n  type ParsedCodexLimitWindow,''',
+              '''  parseCodexBankedResetCount,\n  parseCodexLimitMessage,\n  type ParsedCodexLimitWindow,''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx",
+              '''  const displayName = entry.accountLabel;\n  const instanceDetail =\n    String(provider.instanceId) !== String(provider.driver) ? String(provider.instanceId) : null;\n  const planLabel = provider.auth.label ?? provider.auth.type ?? null;''',
+              '''  const displayName = entry.accountLabel;\n  const planLabel = provider.auth.label ?? provider.auth.type ?? null;''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx",
+              '''        <div className="min-w-0 flex-1">\n          <div className="flex min-w-0 items-center gap-2">\n            <span className="truncate text-sm font-medium text-foreground">{displayName}</span>\n            {instanceDetail ? (\n              <code className="truncate rounded bg-muted/60 px-1 py-0.5 text-[9px] text-muted-foreground">\n                {instanceDetail}\n              </code>\n            ) : null}\n          </div>\n          <div className="truncate text-[11px] text-muted-foreground">''',
+              '''        <div className="min-w-0 flex-1">\n          <div className="truncate text-sm font-medium text-foreground">{displayName}</div>\n          <div className="truncate text-[11px] text-muted-foreground">''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx",
+              '''  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {\n    const discovered = environments.flatMap((environment) =>\n      (environment.serverConfig?.providers ?? []).flatMap((provider) =>\n        String(provider.driver) === "codex"\n          ? [\n              {\n                environmentId: environment.environmentId,\n                environmentLabel: environment.label,\n                provider,\n                windows: parseCodexLimitMessage(provider.message),\n                bankedResetCount: parseCodexBankedResetCount(provider.message),\n              },\n            ]\n          : [],\n      ),\n    );\n\n    return discovered.map((entry, ordinal) => ({\n      ...entry,\n      accountLabel: resolveCodexAccountLabel({\n        displayName: entry.provider.displayName,\n        ordinal,\n        accountCount: discovered.length,\n      }),\n    }));\n  }, [environments]);''',
+              '''  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(\n    () =>\n      environments.flatMap((environment) => {\n        const providerEntries = deriveProviderInstanceEntries(\n          environment.serverConfig?.providers ?? [],\n        );\n        return providerEntries.flatMap((providerEntry) => {\n          if (String(providerEntry.driverKind) !== "codex") return [];\n          const provider = providerEntry.snapshot;\n          return [\n            {\n              environmentId: environment.environmentId,\n              environmentLabel: environment.label,\n              accountLabel: resolveProviderInstanceIdentity(providerEntry, providerEntries).label,\n              provider,\n              windows: parseCodexLimitMessage(provider.message),\n              bankedResetCount: parseCodexBankedResetCount(provider.message),\n            },\n          ];\n        });\n      }),\n    [environments],\n  );''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.ts",
+              '''/**\n * Keep the default Codex instance visually consistent with explicitly named\n * sibling accounts. A custom display name always wins; only the generic\n * built-in "Codex" label is normalized to A1 when multiple accounts exist.\n */\nexport function resolveCodexAccountLabel(input: {\n  readonly displayName: string | null | undefined;\n  readonly ordinal: number;\n  readonly accountCount: number;\n}): string {\n  const configured = input.displayName?.trim();\n  if (configured && (configured !== "Codex" || input.accountCount <= 1)) {\n    return configured;\n  }\n  return input.accountCount > 1 ? `A${input.ordinal + 1}` : configured || "Codex";\n}\n\n''',
+              '''''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts",
+              '''  parseCodexBankedResetCount,\n  parseCodexLimitMessage,\n  resolveCodexAccountLabel,\n} from "./SidebarCodexLimitsPopover.logic.ts";''',
+              '''  parseCodexBankedResetCount,\n  parseCodexLimitMessage,\n} from "./SidebarCodexLimitsPopover.logic.ts";''',
+          )
+
+          replace_once(
+              "apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts",
+              '''\ndescribe("resolveCodexAccountLabel", () => {\n  it("normalizes the generic default instance to A1 in a multi-account setup", () => {\n    expect(resolveCodexAccountLabel({ displayName: "Codex", ordinal: 0, accountCount: 3 })).toBe(\n      "A1",\n    );\n  });\n\n  it("preserves explicit account names", () => {\n    expect(resolveCodexAccountLabel({ displayName: "A2", ordinal: 1, accountCount: 3 })).toBe("A2");\n    expect(resolveCodexAccountLabel({ displayName: "Personal", ordinal: 0, accountCount: 2 })).toBe(\n      "Personal",\n    );\n  });\n\n  it("keeps the normal Codex label for a single account", () => {\n    expect(resolveCodexAccountLabel({ displayName: "Codex", ordinal: 0, accountCount: 1 })).toBe(\n      "Codex",\n    );\n  });\n});''',
+              '''''',
+          )
+
+          popover = Path("apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx").read_text()
+          logic = Path("apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.ts").read_text()
+          tests = Path("apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts").read_text()
+          if "resolveCodexAccountLabel" in popover or "resolveCodexAccountLabel" in logic or "resolveCodexAccountLabel" in tests:
+              raise SystemExit("duplicate Codex account-label helper remained")
+          if "instanceDetail" in popover:
+              raise SystemExit("raw provider instance detail remained in quota UI")
+          PY
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx \
+            apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.ts \
+            apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.logic.ts
+          apps/web/src/components/sidebar/SidebarCodexLimitsPopover.tsx
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          git diff --name-only 7624cb5af7acf5b45497a2f4f1028b92807f463b \
+            | grep -v '^.github/workflows/tmp-sidebar-quota-identity-unification-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused quota and provider identity regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/providerInstances.test.ts \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 7624cb5af7acf5b45497a2f4f1028b92807f463b \
+            | grep -v '^.github/workflows/tmp-sidebar-quota-identity-unification-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-quota-identity-blobs
+          : > /tmp/sidebar-quota-identity-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/sidebar-quota-identity-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-quota-identity-unification-v1-blobs
+          path: /tmp/sidebar-quota-identity-blobs/manifest.txt
+          retention-days: 1
