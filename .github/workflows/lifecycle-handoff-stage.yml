@@ -1,0 +1,87 @@
+name: Lifecycle handoff staging
+
+on:
+  push:
+    branches:
+      - fix/codex-provider-lifecycle
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply minimal provider-instance handoff patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          source = Path('apps/server/src/orchestration/Layers/ProviderCommandReactor.ts')
+          text = source.read_text()
+          old = '''        hasResumeCursor: resumeCursor !== undefined,\n      });\n      const restartedSession = yield* startProviderSession(\n'''
+          new = '''        hasResumeCursor: resumeCursor !== undefined,\n      });\n      if (instanceChanged) {\n        yield* providerService.stopSession({ threadId });\n      }\n      const restartedSession = yield* startProviderSession(\n'''
+          if old not in text:
+              raise SystemExit('ProviderCommandReactor source needle not found or already patched')
+          source.write_text(text.replace(old, new, 1))
+
+          test = Path('apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts')
+          text = test.read_text()
+          old = '''      resumeCursor: { opaque: "resume-1" },\n    });\n\n    const readModel = await harness.readModel();\n'''
+          new = '''      resumeCursor: { opaque: "resume-1" },\n    });\n    expect(harness.stopSession).toHaveBeenCalledTimes(1);\n    expect(harness.stopSession.mock.invocationCallOrder[0]).toBeLessThan(\n      harness.startSession.mock.invocationCallOrder[1]!,\n    );\n\n    const readModel = await harness.readModel();\n'''
+          if old not in text:
+              raise SystemExit('ProviderCommandReactor test needle not found or already patched')
+          test.write_text(text.replace(old, new, 1))
+
+      - name: Format patched files
+        run: pnpm exec vp fmt apps/server/src/orchestration/Layers/ProviderCommandReactor.ts apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Focused reactor test
+        run: pnpm --filter @t3tools/server exec vp test run src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Server typecheck
+        run: pnpm --filter @t3tools/server typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          git status --short
+          git diff -- apps/server/src/orchestration/Layers/ProviderCommandReactor.ts apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Stage validated Git blobs
+        id: blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/lifecycle-blobs
+          : > /tmp/lifecycle-blobs/manifest.txt
+          for file in \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.ts \
+            apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/lifecycle-blobs/manifest.txt
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-handoff-blobs
+          path: /tmp/lifecycle-blobs/manifest.txt
