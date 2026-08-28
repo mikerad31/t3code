@@ -34,6 +34,28 @@ jobs:
             apps/web/src/threadInspectionBus.test.ts \
             apps/web/src/threadInspectionBus.ts
 
+      - name: Adapt export nullability to current type contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("apps/web/src/threadExport.logic.ts")
+          text = path.read_text()
+          old = '''      `- Updated: ${thread.session.updatedAt}`,
+      thread.session.lastError ? `- Last error: ${thread.session.lastError}` : null,
+    );
+'''
+          new = '''      `- Updated: ${thread.session.updatedAt}`,
+    );
+    if (thread.session.lastError) {
+      lines.push(`- Last error: ${thread.session.lastError}`);
+    }
+'''
+          if old not in text:
+              raise SystemExit("expected session last-error export block not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11.10.0
