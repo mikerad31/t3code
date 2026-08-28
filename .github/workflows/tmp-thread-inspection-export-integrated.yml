@@ -1,0 +1,126 @@
+name: Validate integrated thread inspection export
+
+on:
+  push:
+    branches:
+      - validate/thread-inspection-export-integrated
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Transplant proven web inspection/export surface
+        run: |
+          set -euo pipefail
+          git fetch origin feat/thread-inspection-export
+          git checkout origin/feat/thread-inspection-export -- \
+            apps/web/src/components/chat/MessagesTimeline.tsx \
+            apps/web/src/components/threadActionMenu.logic.test.ts \
+            apps/web/src/components/threadActionMenu.logic.ts \
+            apps/web/src/hooks/useThreadActionMenu.ts \
+            apps/web/src/state/threads.ts \
+            apps/web/src/threadExport.logic.test.ts \
+            apps/web/src/threadExport.logic.ts \
+            apps/web/src/threadInspection.ts \
+            apps/web/src/threadInspectionBus.test.ts \
+            apps/web/src/threadInspectionBus.ts
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/web/src/components/chat/MessagesTimeline.tsx \
+            apps/web/src/components/threadActionMenu.logic.test.ts \
+            apps/web/src/components/threadActionMenu.logic.ts \
+            apps/web/src/hooks/useThreadActionMenu.ts \
+            apps/web/src/state/threads.ts \
+            apps/web/src/threadExport.logic.test.ts \
+            apps/web/src/threadExport.logic.ts \
+            apps/web/src/threadInspection.ts \
+            apps/web/src/threadInspectionBus.test.ts \
+            apps/web/src/threadInspectionBus.ts
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/components/chat/MessagesTimeline.tsx
+          apps/web/src/components/threadActionMenu.logic.test.ts
+          apps/web/src/components/threadActionMenu.logic.ts
+          apps/web/src/hooks/useThreadActionMenu.ts
+          apps/web/src/state/threads.ts
+          apps/web/src/threadExport.logic.test.ts
+          apps/web/src/threadExport.logic.ts
+          apps/web/src/threadInspection.ts
+          apps/web/src/threadInspectionBus.test.ts
+          apps/web/src/threadInspectionBus.ts
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          git diff --name-only 5630efe9c84a15d668d1b68a42890d6844d68ff1 \
+            | grep -v '^.github/workflows/tmp-thread-inspection-export-integrated.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused inspection and export regressions
+        run: |
+          pnpm --filter @t3tools/web exec vp test run \
+            src/threadExport.logic.test.ts \
+            src/threadInspectionBus.test.ts \
+            src/components/threadActionMenu.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 5630efe9c84a15d668d1b68a42890d6844d68ff1 \
+            | grep -v '^.github/workflows/tmp-thread-inspection-export-integrated.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/thread-export-blobs
+          : > /tmp/thread-export-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" \
+              --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/thread-export-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thread-inspection-export-integrated-blobs
+          path: /tmp/thread-export-blobs/manifest.txt
+          retention-days: 1
