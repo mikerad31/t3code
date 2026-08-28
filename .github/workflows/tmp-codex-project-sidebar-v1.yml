@@ -1,0 +1,96 @@
+name: Validate Codex project sidebar v1
+
+on:
+  push:
+    branches:
+      - validate/codex-project-sidebar-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply guarded sidebar patch
+        run: |
+          python .github/scripts/tmp-codex-project-sidebar-logic.py
+          python .github/scripts/tmp-codex-project-sidebar-ui.py
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/web/src/components/Sidebar.logic.ts \
+            apps/web/src/components/Sidebar.logic.test.ts \
+            apps/web/src/components/Sidebar.tsx
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/components/Sidebar.logic.test.ts
+          apps/web/src/components/Sidebar.logic.ts
+          apps/web/src/components/Sidebar.tsx
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          git diff --name-only 970f3736f3f8455f176ec5b5f4a54c5b19668bba \
+            | grep -v '^.github/scripts/tmp-codex-project-sidebar-' \
+            | grep -v '^.github/workflows/tmp-codex-project-sidebar-v1.yml$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Sidebar logic regressions
+        run: pnpm --filter @t3tools/web exec vp test run src/components/Sidebar.logic.test.ts
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 970f3736f3f8455f176ec5b5f4a54c5b19668bba \
+            | grep -v '^.github/scripts/tmp-codex-project-sidebar-' \
+            | grep -v '^.github/workflows/tmp-codex-project-sidebar-v1.yml$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sidebar-v1-blobs
+          : > /tmp/sidebar-v1-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" \
+              --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/sidebar-v1-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-project-sidebar-v1-blobs
+          path: /tmp/sidebar-v1-blobs/manifest.txt
+          retention-days: 1
