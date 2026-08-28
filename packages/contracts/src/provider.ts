@@ -133,6 +133,57 @@ export class ProviderUploadFeedbackError extends Schema.TaggedErrorClass<Provide
   }
 }
 
+export const ProviderRateLimitResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type ProviderRateLimitResetCreditOutcome = typeof ProviderRateLimitResetCreditOutcome.Type;
+
+export const ProviderConsumeRateLimitResetCreditInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  idempotencyKey: TrimmedNonEmptyString,
+});
+export type ProviderConsumeRateLimitResetCreditInput =
+  typeof ProviderConsumeRateLimitResetCreditInput.Type;
+
+export const ProviderConsumeRateLimitResetCreditResult = Schema.Struct({
+  outcome: ProviderRateLimitResetCreditOutcome,
+});
+export type ProviderConsumeRateLimitResetCreditResult =
+  typeof ProviderConsumeRateLimitResetCreditResult.Type;
+
+export const ProviderConsumeRateLimitResetCreditErrorReason = Schema.Literals([
+  "instanceNotFound",
+  "unsupported",
+  "consumeFailed",
+]);
+export type ProviderConsumeRateLimitResetCreditErrorReason =
+  typeof ProviderConsumeRateLimitResetCreditErrorReason.Type;
+
+export class ProviderConsumeRateLimitResetCreditError extends Schema.TaggedErrorClass<ProviderConsumeRateLimitResetCreditError>()(
+  "ProviderConsumeRateLimitResetCreditError",
+  {
+    instanceId: ProviderInstanceId,
+    reason: ProviderConsumeRateLimitResetCreditErrorReason,
+    detail: Schema.optional(TrimmedNonEmptyString),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    if (this.detail) return this.detail;
+    switch (this.reason) {
+      case "instanceNotFound":
+        return `Provider instance ${this.instanceId} was not found.`;
+      case "unsupported":
+        return `Provider instance ${this.instanceId} does not support banked rate-limit resets.`;
+      case "consumeFailed":
+        return `Failed to consume a banked rate-limit reset for ${this.instanceId}.`;
+    }
+  }
+}
+
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({

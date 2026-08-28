@@ -87,6 +87,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import { consumeProviderRateLimitResetCredit } from "./provider/consumeRateLimitResetCredit.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
@@ -1599,6 +1600,12 @@ const makeWsRpcLayer = (
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.providerConsumeRateLimitResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeRateLimitResetCredit,
+            consumeProviderRateLimitResetCredit(input),
+            { "rpc.aggregate": "provider" },
           ),
         [WS_METHODS.providerUploadFeedback]: (input) =>
           observeRpcEffect(
