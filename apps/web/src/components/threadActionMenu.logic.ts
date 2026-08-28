@@ -116,7 +116,7 @@ export function buildThreadActionMenuItems(
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
     {
       id: "copy",
-      label: "Copy",
+      label: "Copy details",
       icon: "copy",
       separatorBefore: true,
       children: [
@@ -131,19 +131,19 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "inspect-thread" as const,
-            label: "Inspect thread",
-            icon: "copy",
+            label: "Conversation",
+            icon: "folder-tree",
             children: [
               { id: "expand-all" as const, label: "Expand all" },
               { id: "collapse-all" as const, label: "Collapse all" },
               {
                 id: "copy-full-thread" as const,
-                label: "Copy full thread",
+                label: "Copy conversation",
                 icon: "copy",
                 separatorBefore: true,
               },
-              { id: "export-thread-markdown" as const, label: "Export Markdown" },
-              { id: "export-thread-json" as const, label: "Export JSON" },
+              { id: "export-thread-markdown" as const, label: "Export as Markdown" },
+              { id: "export-thread-json" as const, label: "Export as JSON" },
             ],
           },
         ]
