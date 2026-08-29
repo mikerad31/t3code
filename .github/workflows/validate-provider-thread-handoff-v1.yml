@@ -43,6 +43,19 @@ jobs:
       - name: Apply guarded lifecycle patch
         run: python3 scripts/patch-provider-thread-handoff-v1.py
 
+      - name: Repair Effect semaphore construction
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("apps/server/src/provider/Layers/ProviderService.ts")
+          text = p.read_text(encoding="utf-8")
+          old = "    const created = yield* Effect.makeSemaphore(1);"
+          new = "    const created = Effect.makeSemaphore(1);"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one semaphore construction, found {text.count(old)}")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Format
         run: vp fmt
 
