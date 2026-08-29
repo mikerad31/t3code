@@ -1,15 +1,15 @@
-name: Validate provider thread handoff v1
+name: Validate provider thread handoff v2
 
 on:
   push:
     branches:
-      - validate/provider-thread-handoff-v1
+      - validate/provider-thread-handoff-v2
   workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -46,6 +46,9 @@ jobs:
       - name: Use Effect v4 per-thread semaphore
         run: python3 scripts/repair-provider-handoff-semaphore-v1.py
 
+      - name: Apply transactional binding repair patch
+        run: python3 scripts/patch-provider-thread-handoff-v2.py
+
       - name: Format
         run: vp fmt
 
@@ -54,10 +57,14 @@ jobs:
           git diff --name-only 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- \
             ':!.github/workflows/validate-provider-thread-handoff-v1.yml' \
             ':!scripts/patch-provider-thread-handoff-v1.py' \
-            ':!scripts/repair-provider-handoff-semaphore-v1.py' | sort > /tmp/actual.txt
+            ':!scripts/repair-provider-handoff-semaphore-v1.py' \
+            ':!scripts/patch-provider-thread-handoff-v2.py' | sort > /tmp/actual.txt
           cat > /tmp/expected.txt <<'EOF'
           apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          apps/server/src/provider/Layers/ProviderService.test.ts
           apps/server/src/provider/Layers/ProviderService.ts
+          apps/server/src/provider/Services/ProviderService.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
           apps/server/src/threadImport/ThreadImportService.ts
           apps/server/src/ws.ts
           EOF
@@ -72,7 +79,7 @@ jobs:
           set +e
           (cd apps/server && vp test run src/provider/Layers/ProviderService.test.ts) > /tmp/provider-service-test.log 2>&1
           status=$?
-          tail -n 300 /tmp/provider-service-test.log
+          tail -n 400 /tmp/provider-service-test.log
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -80,7 +87,7 @@ jobs:
         if: always() && steps.provider_service_tests.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: provider-service-test-log
+          name: provider-service-test-log-v2
           path: /tmp/provider-service-test.log
           if-no-files-found: error
           retention-days: 7
@@ -104,8 +111,11 @@ jobs:
           tail -n 300 /tmp/thread-import-test.log
           exit $status
 
-      - name: Server typecheck
-        run: vp run --filter t3 typecheck
+      - name: Full server tests
+        run: cd apps/server && vp test run
+
+      - name: Monorepo typecheck
+        run: vp run typecheck
 
       - name: Diff sanity
         run: |
@@ -115,18 +125,18 @@ jobs:
       - name: Stage validated product blobs
         if: success()
         run: |
-          mkdir -p /tmp/provider-handoff-v1
+          mkdir -p /tmp/provider-handoff-v2
           while read -r path; do
-            mkdir -p "/tmp/provider-handoff-v1/$(dirname "$path")"
-            cp "$path" "/tmp/provider-handoff-v1/$path"
+            mkdir -p "/tmp/provider-handoff-v2/$(dirname "$path")"
+            cp "$path" "/tmp/provider-handoff-v2/$path"
             printf '%s %s\n' "$(git hash-object "$path")" "$path"
-          done < /tmp/expected.txt | tee /tmp/provider-handoff-v1/manifest.txt
-          git diff --binary 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- $(cat /tmp/expected.txt) > /tmp/provider-handoff-v1/product.patch
+          done < /tmp/expected.txt | tee /tmp/provider-handoff-v2/manifest.txt
+          git diff --binary 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- $(cat /tmp/expected.txt) > /tmp/provider-handoff-v2/product.patch
 
       - name: Upload validated blobs
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: provider-thread-handoff-v1-blobs
-          path: /tmp/provider-handoff-v1
+          name: provider-thread-handoff-v2-blobs
+          path: /tmp/provider-handoff-v2
           retention-days: 7
