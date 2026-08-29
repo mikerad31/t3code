@@ -1,0 +1,74 @@
+name: Validate lifecycle restack final
+
+on:
+  push:
+    branches:
+      - validate/lifecycle-restack-final
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Assert exact lifecycle surface
+        run: |
+          git fetch origin main
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+          apps/server/src/provider/Drivers/CodexHomeLayout.ts
+          apps/server/src/provider/Layers/ProviderSessionDirectory.instanceSwitch.test.ts
+          apps/server/src/provider/Layers/ProviderSessionDirectory.ts
+          EOF
+          sort -o /tmp/expected.txt /tmp/expected.txt
+          git diff --name-only origin/main...HEAD \
+            | grep -v '^.github/workflows/tmp-validate-lifecycle-restack-final.yml$' \
+            | sort > /tmp/actual.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused lifecycle regressions
+        run: |
+          pnpm --filter t3 exec vp test run \
+            src/orchestration/Layers/ProviderCommandReactor.test.ts \
+            src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            src/provider/Layers/ProviderSessionDirectory.instanceSwitch.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check origin/main...HEAD
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only origin/main...HEAD \
+            | grep -v '^.github/workflows/tmp-validate-lifecycle-restack-final.yml$' \
+            | sort > /tmp/actual-final.txt
+          diff -u /tmp/expected.txt /tmp/actual-final.txt
