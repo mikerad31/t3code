@@ -63,13 +63,28 @@ jobs:
         run: vp check
 
       - name: Focused provider service tests
-        run: cd apps/server && vp test run src/provider/Layers/ProviderService.test.ts
+        run: |
+          set +e
+          (cd apps/server && vp test run src/provider/Layers/ProviderService.test.ts) > /tmp/provider-service-test.log 2>&1
+          status=$?
+          tail -n 300 /tmp/provider-service-test.log
+          exit $status
 
       - name: Focused reactor tests
-        run: cd apps/server && vp test run src/orchestration/Layers/ProviderCommandReactor.test.ts
+        run: |
+          set +e
+          (cd apps/server && vp test run src/orchestration/Layers/ProviderCommandReactor.test.ts) > /tmp/provider-reactor-test.log 2>&1
+          status=$?
+          tail -n 300 /tmp/provider-reactor-test.log
+          exit $status
 
       - name: Focused importer tests
-        run: cd apps/server && vp test run src/threadImport/ThreadImportService.test.ts
+        run: |
+          set +e
+          (cd apps/server && vp test run src/threadImport/ThreadImportService.test.ts) > /tmp/thread-import-test.log 2>&1
+          status=$?
+          tail -n 300 /tmp/thread-import-test.log
+          exit $status
 
       - name: Server typecheck
         run: vp run --filter t3 typecheck
