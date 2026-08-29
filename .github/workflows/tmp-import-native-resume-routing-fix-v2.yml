@@ -1,0 +1,101 @@
+name: Validate native resume retry routing guard
+
+on:
+  push:
+    branches:
+      - validate/import-native-resume-routing-fix-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply retry routing guard
+        run: python3 .github/tmp-import-native-resume-routing-fix-v2.py
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/web/src/components/ChatView.logic.ts \
+            apps/web/src/components/ChatView.logic.test.ts \
+            apps/web/src/components/chat/ChatComposer.tsx
+
+      - name: Assert exact product surface
+        run: |
+          cat > /tmp/expected-files.txt <<'EOF'
+          apps/web/src/components/ChatView.logic.test.ts
+          apps/web/src/components/ChatView.logic.ts
+          apps/web/src/components/chat/ChatComposer.tsx
+          EOF
+          sort -o /tmp/expected-files.txt /tmp/expected-files.txt
+          git diff --name-only fa82590c057d7994bbe6aedb4efb29bd6593e980 \
+            | grep -v '^.github/workflows/tmp-import-native-resume-routing-fix-v2.yml$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-v2.py$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-v2-trigger.txt$' \
+            | sort > /tmp/actual-files.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused web regression
+        run: pnpm --filter @t3tools/web exec vp test run src/components/ChatView.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only fa82590c057d7994bbe6aedb4efb29bd6593e980 \
+            | grep -v '^.github/workflows/tmp-import-native-resume-routing-fix-v2.yml$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-v2.py$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-v2-trigger.txt$' \
+            | sort > /tmp/actual-files-after.txt
+          diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/import-native-resume-routing-fix-v2-blobs
+          : > /tmp/import-native-resume-routing-fix-v2-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/import-native-resume-routing-fix-v2-blobs/manifest.txt
+          done < /tmp/expected-files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: import-native-resume-routing-fix-v2-blobs
+          path: /tmp/import-native-resume-routing-fix-v2-blobs/manifest.txt
+          retention-days: 1
