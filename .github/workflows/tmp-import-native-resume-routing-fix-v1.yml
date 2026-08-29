@@ -53,6 +53,7 @@ jobs:
           git diff --name-only 37fb7d8d20b14922c6eab526a1180d808f71804b \
             | grep -v '^.github/workflows/tmp-import-native-resume-routing-fix-v1.yml$' \
             | grep -v '^.github/tmp-import-native-resume-routing-fix-v1.py$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-trigger.txt$' \
             | sort > /tmp/actual-files.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files.txt
 
@@ -81,6 +82,7 @@ jobs:
           git diff --name-only 37fb7d8d20b14922c6eab526a1180d808f71804b \
             | grep -v '^.github/workflows/tmp-import-native-resume-routing-fix-v1.yml$' \
             | grep -v '^.github/tmp-import-native-resume-routing-fix-v1.py$' \
+            | grep -v '^.github/tmp-import-native-resume-routing-fix-trigger.txt$' \
             | sort > /tmp/actual-files-after.txt
           diff -u /tmp/expected-files.txt /tmp/actual-files-after.txt
 
