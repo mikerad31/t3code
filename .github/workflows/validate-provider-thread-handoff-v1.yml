@@ -43,16 +43,53 @@ jobs:
       - name: Apply guarded lifecycle patch
         run: python3 scripts/patch-provider-thread-handoff-v1.py
 
-      - name: Repair Effect semaphore construction
+      - name: Use Effect v4 per-thread semaphore
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path("apps/server/src/provider/Layers/ProviderService.ts")
           text = p.read_text(encoding="utf-8")
-          old = "    const created = yield* Effect.makeSemaphore(1);"
-          new = "    const created = Effect.makeSemaphore(1);"
+          import_needle = 'import * as Ref from "effect/Ref";\n'
+          if text.count(import_needle) != 1:
+              raise SystemExit("Ref import boundary drifted")
+          text = text.replace(import_needle, import_needle + 'import * as Semaphore from "effect/Semaphore";\n', 1)
+          old = '''  const threadHandoffLocks = new Map<string, Effect.Semaphore>();
+  const getThreadHandoffLock = Effect.fn("getThreadHandoffLock")(function* (threadId: ThreadId) {
+    const key = String(threadId);
+    const existing = threadHandoffLocks.get(key);
+    if (existing) return existing;
+
+    const created = yield* Effect.makeSemaphore(1);
+    // `makeSemaphore` may yield; if another fiber won the race, share its lock.
+    const raced = threadHandoffLocks.get(key);
+    if (raced) return raced;
+    threadHandoffLocks.set(key, created);
+    return created;
+  });
+  const withThreadHandoffLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.flatMap(getThreadHandoffLock(threadId), (lock) => lock.withPermits(1)(effect));
+'''
+          new = '''  const threadHandoffLocks = new Map<string, Semaphore.Semaphore>();
+  const getThreadHandoffLock = (threadId: ThreadId): Semaphore.Semaphore => {
+    const key = String(threadId);
+    const existing = threadHandoffLocks.get(key);
+    if (existing) return existing;
+
+    // Construction is synchronous in Effect v4, so there is no creation race.
+    const created = Semaphore.makeUnsafe(1);
+    threadHandoffLocks.set(key, created);
+    return created;
+  };
+  const withThreadHandoffLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> => getThreadHandoffLock(threadId).withPermit(effect);
+'''
           if text.count(old) != 1:
-              raise SystemExit(f"expected one semaphore construction, found {text.count(old)}")
+              raise SystemExit(f"expected one generated handoff lock block, found {text.count(old)}")
           p.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
 
