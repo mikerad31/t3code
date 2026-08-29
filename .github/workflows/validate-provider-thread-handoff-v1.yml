@@ -23,6 +23,23 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Repair validator patcher tail matchers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/patch-provider-thread-handoff-v1.py")
+          text = p.read_text(encoding="utf-8")
+          old_needle = "needle = '''      ).pipe(\\n"
+          new_needle = "needle = '''      }).pipe(\\n"
+          old_replacement = "replacement = '''      ).pipe(\\n"
+          new_replacement = "replacement = '''      }).pipe(\\n"
+          if text.count(old_needle) != 1 or text.count(old_replacement) != 1:
+              raise SystemExit("expected startSession tail matcher literals not found exactly once")
+          text = text.replace(old_needle, new_needle, 1)
+          text = text.replace(old_replacement, new_replacement, 1)
+          p.write_text(text, encoding="utf-8")
+          PY
+
       - name: Apply guarded lifecycle patch
         run: python3 scripts/patch-provider-thread-handoff-v1.py
 
