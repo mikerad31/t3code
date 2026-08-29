@@ -749,7 +749,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
-  const providerSelectionTouchedThreadIdRef = useRef<ThreadId | null>(null);
+  const explicitlySelectedProviderInstanceRef = useRef<{
+    readonly threadId: ThreadId;
+    readonly instanceId: ProviderInstanceId;
+  } | null>(null);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
@@ -835,8 +838,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     persistedThreadInstanceId: activeThreadModelSelection?.instanceId,
     draftActiveProvider: composerDraft.activeProvider,
     sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
-    explicitlySelectedForThread:
-      activeThreadId !== null && providerSelectionTouchedThreadIdRef.current === activeThreadId,
+    explicitlySelectedProviderInstanceId:
+      activeThreadId !== null &&
+      explicitlySelectedProviderInstanceRef.current?.threadId === activeThreadId
+        ? explicitlySelectedProviderInstanceRef.current.instanceId
+        : null,
   });
   const selectedProviderByThreadId = importedThreadProviderRouting.draftActiveProvider;
   const threadProvider =
@@ -1010,7 +1016,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const handleProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
-      providerSelectionTouchedThreadIdRef.current = activeThreadId;
+      explicitlySelectedProviderInstanceRef.current =
+        activeThreadId === null ? null : { threadId: activeThreadId, instanceId };
       onProviderModelSelect(instanceId, model);
     },
     [activeThreadId, onProviderModelSelect],
@@ -2545,7 +2552,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [hasBlockingComposerTopDrawer]);
 
   useEffect(() => {
-    providerSelectionTouchedThreadIdRef.current = null;
+    explicitlySelectedProviderInstanceRef.current = null;
     setIsTasksDrawerOpen(false);
   }, [activeThreadId]);
 

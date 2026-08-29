@@ -159,7 +159,7 @@ export function resolveImportedThreadProviderRouting(input: {
   persistedThreadInstanceId: ProviderInstanceId | null | undefined;
   draftActiveProvider: ProviderInstanceId | null | undefined;
   sessionProviderInstanceId: ProviderInstanceId | null | undefined;
-  explicitlySelectedForThread: boolean;
+  explicitlySelectedProviderInstanceId: ProviderInstanceId | null | undefined;
 }): {
   draftActiveProvider: ProviderInstanceId | null;
   sessionProviderInstanceId: ProviderInstanceId | null;
@@ -167,26 +167,24 @@ export function resolveImportedThreadProviderRouting(input: {
   const draftActiveProvider = input.draftActiveProvider ?? null;
   const sessionProviderInstanceId = input.sessionProviderInstanceId ?? null;
   const persistedThreadInstanceId = input.persistedThreadInstanceId ?? null;
+  const explicitlySelectedProviderInstanceId = input.explicitlySelectedProviderInstanceId ?? null;
   const isImportedThread =
     input.threadId !== null && String(input.threadId).startsWith("imported:");
 
-  if (
-    !isImportedThread ||
-    persistedThreadInstanceId === null ||
-    input.explicitlySelectedForThread
-  ) {
+  if (!isImportedThread || persistedThreadInstanceId === null) {
     return { draftActiveProvider, sessionProviderInstanceId };
   }
 
+  const providerIsAllowed = (instanceId: ProviderInstanceId | null): boolean =>
+    instanceId === null ||
+    instanceId === persistedThreadInstanceId ||
+    instanceId === explicitlySelectedProviderInstanceId;
+
   return {
-    draftActiveProvider:
-      draftActiveProvider !== null && draftActiveProvider !== persistedThreadInstanceId
-        ? null
-        : draftActiveProvider,
-    sessionProviderInstanceId:
-      sessionProviderInstanceId !== null && sessionProviderInstanceId !== persistedThreadInstanceId
-        ? null
-        : sessionProviderInstanceId,
+    draftActiveProvider: providerIsAllowed(draftActiveProvider) ? draftActiveProvider : null,
+    sessionProviderInstanceId: providerIsAllowed(sessionProviderInstanceId)
+      ? sessionProviderInstanceId
+      : null,
   };
 }
 

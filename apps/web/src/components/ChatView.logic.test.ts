@@ -383,7 +383,7 @@ describe("resolveImportedThreadProviderRouting", () => {
         persistedThreadInstanceId: sourceInstanceId,
         draftActiveProvider: staleInstanceId,
         sessionProviderInstanceId: staleInstanceId,
-        explicitlySelectedForThread: false,
+        explicitlySelectedProviderInstanceId: null,
       }),
     ).toEqual({
       draftActiveProvider: null,
@@ -391,14 +391,29 @@ describe("resolveImportedThreadProviderRouting", () => {
     });
   });
 
-  it("honors a provider change explicitly selected during the current thread visit", () => {
+  it("does not unlock stale provider drift after a model-only selection on the source instance", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: sourceInstanceId,
+      }),
+    ).toEqual({
+      draftActiveProvider: null,
+      sessionProviderInstanceId: null,
+    });
+  });
+
+  it("honors an explicitly selected different provider instance during the current thread visit", () => {
     expect(
       resolveImportedThreadProviderRouting({
         threadId: importedThreadId,
         persistedThreadInstanceId: sourceInstanceId,
         draftActiveProvider: staleInstanceId,
         sessionProviderInstanceId: sourceInstanceId,
-        explicitlySelectedForThread: true,
+        explicitlySelectedProviderInstanceId: staleInstanceId,
       }),
     ).toEqual({
       draftActiveProvider: staleInstanceId,
@@ -413,7 +428,7 @@ describe("resolveImportedThreadProviderRouting", () => {
         persistedThreadInstanceId: sourceInstanceId,
         draftActiveProvider: staleInstanceId,
         sessionProviderInstanceId: staleInstanceId,
-        explicitlySelectedForThread: false,
+        explicitlySelectedProviderInstanceId: null,
       }),
     ).toEqual({
       draftActiveProvider: staleInstanceId,
