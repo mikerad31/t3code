@@ -1,0 +1,76 @@
+name: Validate final main post-merge v1
+
+on:
+  push:
+    branches:
+      - validate/final-main-postmerge-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Assert exact final-main baseline
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "1d21a9044af87adb0eb2095e6f903650b56a040d"
+          printf '%s\n' '.github/workflows/tmp-validate-final-main-postmerge-v1.yml' > /tmp/expected.txt
+          git diff --name-only origin/main...HEAD | sort > /tmp/actual.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused final cross-feature regressions
+        run: |
+          pnpm --filter t3 exec vp test run \
+            src/threadImport/ThreadImportService.test.ts \
+            src/orchestration/Layers/ProviderCommandReactor.test.ts \
+            src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            src/provider/Layers/ProviderSessionDirectory.instanceSwitch.test.ts \
+            src/provider/Layers/CodexRateLimits.test.ts \
+            src/provider/consumeRateLimitResetCredit.test.ts
+          pnpm --filter @t3tools/web exec vp test run \
+            src/components/ChatView.logic.test.ts \
+            src/components/CommandPalette.logic.test.ts \
+            src/components/Sidebar.logic.test.ts \
+            src/components/sidebar/SidebarCodexLimitsPopover.logic.test.ts \
+            src/components/threadActionMenu.logic.test.ts \
+            src/threadExport.logic.test.ts \
+            src/threadInspectionBus.test.ts \
+            src/providerInstances.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final repository sanity
+        run: |
+          git diff --check origin/main...HEAD
+          test -z "$(git diff --name-only --diff-filter=U)"
+          printf '%s\n' '.github/workflows/tmp-validate-final-main-postmerge-v1.yml' > /tmp/expected-final.txt
+          git diff --name-only origin/main...HEAD | sort > /tmp/actual-final.txt
+          diff -u /tmp/expected-final.txt /tmp/actual-final.txt
