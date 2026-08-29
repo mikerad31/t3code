@@ -31,6 +31,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import type { ProviderThreadImportShape } from "../provider/ProviderThreadImport.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
 import {
   type ProviderRuntimeBinding,
   ProviderSessionDirectory,
@@ -194,8 +195,9 @@ export const makeThreadImportService = (input: {
   readonly engine: OrchestrationEngineService["Service"];
   readonly providerInstances: ProviderInstanceRegistry["Service"];
   readonly providerSessions: ProviderSessionDirectory["Service"];
+  readonly providerService: ProviderService["Service"];
 }): ThreadImportServiceShape => {
-  const { projection, engine, providerInstances, providerSessions } = input;
+  const { projection, engine, providerInstances, providerSessions, providerService } = input;
 
   const readProject = (projectId: ThreadImportScanInput["projectId"]) =>
     projection.getProjectShellById(projectId).pipe(
@@ -451,56 +453,53 @@ export const makeThreadImportService = (input: {
           }
         }
 
-        if (
+        const needsMetadataRepair =
           materializedBeforeBinding &&
           existingThread !== undefined &&
-          existingThread.modelSelection.instanceId !== source.instance.instanceId
-        ) {
-          const repairTimestamp = yield* nowIso;
-          const metadataRepairResult = yield* Effect.result(
-            engine.dispatch({
-              type: "thread.meta.update",
-              commandId: CommandId.make(
-                `import-provider-repair:${stableHash(
-                  `${String(candidateId)}\0${repairTimestamp}`,
-                ).slice(0, 40)}`,
-              ),
-              threadId,
-              modelSelection,
-            }),
-          );
-          if (Result.isFailure(metadataRepairResult)) {
-            results.push({
-              candidateId,
-              status: "transcript-only",
-              threadId,
-              importedMessageCount: 0,
-              warnings: [...transcript.warnings],
-              error:
-                "The transcript is already imported, but its Codex provider instance could not be restored.",
-            });
-            continue;
-          }
-          existingThread = { ...existingThread, modelSelection };
-        }
+          existingThread.modelSelection.instanceId !== source.instance.instanceId;
+        const metadataRepair = needsMetadataRepair
+          ? Effect.gen(function* () {
+              const repairTimestamp = yield* nowIso;
+              yield* engine.dispatch({
+                type: "thread.meta.update",
+                commandId: CommandId.make(
+                  `import-provider-repair:${stableHash(
+                    `${String(candidateId)}\0${repairTimestamp}`,
+                  ).slice(0, 40)}`,
+                ),
+                threadId,
+                modelSelection,
+              });
+            })
+          : Effect.void;
 
         let status: ThreadImportItemResult["status"] = materializedBeforeBinding
           ? "already-imported"
           : "imported";
         const bindingResult = yield* Effect.result(
-          providerSessions.upsert({
-            threadId,
-            provider: CODEX_DRIVER,
-            providerInstanceId: source.instance.instanceId,
-            status: "stopped",
-            resumeCursor: transcript.resumeCursor,
-            runtimeMode: existingThread?.runtimeMode ?? runtimeMode,
-            runtimePayload: {
-              cwd: transcript.sourceCwd,
-              modelSelection,
+          providerService.reconcileSessionBinding(
+            {
+              threadId,
+              provider: CODEX_DRIVER,
+              providerInstanceId: source.instance.instanceId,
+              status: "stopped",
+              resumeCursor: transcript.resumeCursor,
+              runtimeMode: existingThread?.runtimeMode ?? runtimeMode,
+              runtimePayload: {
+                cwd: transcript.sourceCwd,
+                modelSelection,
+              },
             },
-          }),
+            metadataRepair,
+          ),
         );
+        if (
+          Result.isSuccess(bindingResult) &&
+          needsMetadataRepair &&
+          existingThread !== undefined
+        ) {
+          existingThread = { ...existingThread, modelSelection };
+        }
         const warnings = [...transcript.warnings];
         if (Result.isFailure(bindingResult)) {
           status = "transcript-only";

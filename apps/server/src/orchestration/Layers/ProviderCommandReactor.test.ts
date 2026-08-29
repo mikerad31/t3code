@@ -326,6 +326,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      reconcileSessionBinding: (_binding, afterBindingCommit) => afterBindingCommit,
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -2025,10 +2026,10 @@ describe("ProviderCommandReactor", () => {
       providerInstanceId: ProviderInstanceId.make("codex_work"),
       resumeCursor: { opaque: "resume-1" },
     });
-    expect(harness.stopSession).toHaveBeenCalledTimes(1);
-    expect(harness.stopSession.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.startSession.mock.invocationCallOrder[1]!,
-    );
+    // ProviderService owns serialized stop-old -> start-new handoff. The reactor
+    // only delegates the replacement start and must not independently stop the
+    // thread, which would split lifecycle ownership and reopen the race.
+    expect(harness.stopSession).toHaveBeenCalledTimes(0);
 
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));

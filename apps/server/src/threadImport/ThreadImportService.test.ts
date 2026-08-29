@@ -25,6 +25,7 @@ import {
   type ProviderThreadImportTranscript,
 } from "../provider/ProviderThreadImport.ts";
 import type { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
+import type { ProviderService } from "../provider/Services/ProviderService.ts";
 import type {
   ProviderRuntimeBinding,
   ProviderSessionDirectory,
@@ -186,12 +187,19 @@ function makeHarness(options: {
     listBindings: () => Effect.succeed([]),
   } as ProviderSessionDirectory["Service"];
 
+  const reconcileSessionBinding: ProviderService["Service"]["reconcileSessionBinding"] = (
+    binding,
+    afterBindingCommit,
+  ) => providerSessions.upsert(binding).pipe(Effect.andThen(afterBindingCommit));
+  const providerService = { reconcileSessionBinding } as ProviderService["Service"];
+
   return {
     service: makeThreadImportService({
       projection,
       engine,
       providerInstances,
       providerSessions,
+      providerService,
     }),
     commands,
     bindings,
