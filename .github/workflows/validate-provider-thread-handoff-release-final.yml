@@ -1,0 +1,90 @@
+name: Validate clean provider handoff release
+
+on:
+  push:
+    branches:
+      - validate/provider-thread-handoff-release-final
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Verify exact release surface
+        run: |
+          git diff --name-only 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- \
+            ':!.github/workflows/validate-provider-thread-handoff-release-final.yml' | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/integration/orphanedProviderSessionStartup.integration.test.ts
+          apps/server/src/orchestration/Layers/CheckpointReactor.test.ts
+          apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts
+          apps/server/src/provider/Layers/ProviderService.test.ts
+          apps/server/src/provider/Layers/ProviderService.ts
+          apps/server/src/provider/Layers/ProviderSessionReaper.test.ts
+          apps/server/src/provider/Services/ProviderService.ts
+          apps/server/src/serverRuntimeStartup.reconcile.test.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          apps/server/src/ws.ts
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Verify green artifact blob manifest
+        run: |
+          cat > /tmp/manifest.txt <<'EOF'
+          e1edab7746a6ad3be8fa76e78606c9fed98a1638 apps/server/integration/orphanedProviderSessionStartup.integration.test.ts
+          0caad3b95de3bf6a7ae22aad8457fd1a0dac1bef apps/server/src/orchestration/Layers/CheckpointReactor.test.ts
+          0a9b8507a3ecdb193c66bdc5968582a7a0322228 apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          1c0091028addb7173d66a4d9d0cd0c4ab00f4b7e apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          7e0b1ec071848ca90e0aafd32a2fc89583f7ceb1 apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts
+          f04f4a0a8a54343f0ff3fe080528b312043151db apps/server/src/provider/Layers/ProviderService.test.ts
+          f4f44a218ed211665f76aaa4a07908e20c12ac5f apps/server/src/provider/Layers/ProviderService.ts
+          26f1ac697e299645e9c33f77d6e57eed7df99876 apps/server/src/provider/Layers/ProviderSessionReaper.test.ts
+          624789926fe691570b790d2dafdede08c330427a apps/server/src/provider/Services/ProviderService.ts
+          587e41a38c1ffe0f844e152848dae998b226004b apps/server/src/serverRuntimeStartup.reconcile.test.ts
+          a2ce15693f7ab04e5ea1e7cab497567888160b16 apps/server/src/threadImport/ThreadImportService.test.ts
+          f2a75d210a20b481f62cb319c1a9282199879e1f apps/server/src/threadImport/ThreadImportService.ts
+          e3fe0c1bc7b805607fc80a926bec0ad35ba90e94 apps/server/src/ws.ts
+          EOF
+          while read -r expected path; do
+            actual=$(git hash-object "$path")
+            test "$actual" = "$expected" || { echo "SHA mismatch: $path expected=$expected actual=$actual"; exit 1; }
+          done < /tmp/manifest.txt
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused provider service tests
+        run: cd apps/server && vp test run src/provider/Layers/ProviderService.test.ts
+
+      - name: Focused reactor tests
+        run: cd apps/server && vp test run src/orchestration/Layers/ProviderCommandReactor.test.ts
+
+      - name: Focused importer tests
+        run: cd apps/server && vp test run src/threadImport/ThreadImportService.test.ts
+
+      - name: Full server tests
+        run: cd apps/server && vp test run
+
+      - name: Monorepo typecheck
+        run: vp run typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check 7b3cf77b888cf35428848ab9a4647443ebf6c1ad..HEAD -- $(cat /tmp/expected.txt)
+          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src apps/server/integration
