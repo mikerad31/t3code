@@ -72,6 +72,7 @@ export const ThreadImportItemStatus = Schema.Literals([
   "imported",
   "already-imported",
   "transcript-only",
+  "skipped",
   "failed",
 ]);
 export type ThreadImportItemStatus = typeof ThreadImportItemStatus.Type;

@@ -327,7 +327,7 @@ export const makeThreadImportService = (input: {
         if (!source) {
           results.push({
             candidateId,
-            status: "failed",
+            status: "skipped",
             threadId: null,
             importedMessageCount: 0,
             warnings: [],
@@ -377,7 +377,7 @@ export const makeThreadImportService = (input: {
         if (Result.isFailure(transcriptResult)) {
           results.push({
             candidateId,
-            status: transcriptAlreadyImported ? "transcript-only" : "failed",
+            status: transcriptAlreadyImported ? "transcript-only" : "skipped",
             threadId: transcriptAlreadyImported ? threadId : null,
             importedMessageCount: 0,
             warnings: [...source.candidate.warnings],
@@ -391,7 +391,7 @@ export const makeThreadImportService = (input: {
         if (!transcriptAlreadyImported && messages.length === 0) {
           results.push({
             candidateId,
-            status: "failed",
+            status: "skipped",
             threadId: null,
             importedMessageCount: 0,
             warnings: [...transcript.warnings],
