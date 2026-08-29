@@ -148,6 +148,46 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   };
 }
 
+/**
+ * Imported provider conversations carry an exact provider-instance binding.
+ * Their deterministic T3 thread ids can resurrect stale browser-local composer
+ * state from an earlier import. Until the user explicitly changes provider in
+ * the current thread visit, the persisted server-thread instance is canonical.
+ */
+export function resolveImportedThreadProviderRouting(input: {
+  threadId: ThreadId | null;
+  persistedThreadInstanceId: ProviderInstanceId | null | undefined;
+  draftActiveProvider: ProviderInstanceId | null | undefined;
+  sessionProviderInstanceId: ProviderInstanceId | null | undefined;
+  explicitlySelectedProviderInstanceId: ProviderInstanceId | null | undefined;
+}): {
+  draftActiveProvider: ProviderInstanceId | null;
+  sessionProviderInstanceId: ProviderInstanceId | null;
+} {
+  const draftActiveProvider = input.draftActiveProvider ?? null;
+  const sessionProviderInstanceId = input.sessionProviderInstanceId ?? null;
+  const persistedThreadInstanceId = input.persistedThreadInstanceId ?? null;
+  const explicitlySelectedProviderInstanceId = input.explicitlySelectedProviderInstanceId ?? null;
+  const isImportedThread =
+    input.threadId !== null && String(input.threadId).startsWith("imported:");
+
+  if (!isImportedThread || persistedThreadInstanceId === null) {
+    return { draftActiveProvider, sessionProviderInstanceId };
+  }
+
+  const providerIsAllowed = (instanceId: ProviderInstanceId | null): boolean =>
+    instanceId === null ||
+    instanceId === persistedThreadInstanceId ||
+    instanceId === explicitlySelectedProviderInstanceId;
+
+  return {
+    draftActiveProvider: providerIsAllowed(draftActiveProvider) ? draftActiveProvider : null,
+    sessionProviderInstanceId: providerIsAllowed(sessionProviderInstanceId)
+      ? sessionProviderInstanceId
+      : null,
+  };
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
