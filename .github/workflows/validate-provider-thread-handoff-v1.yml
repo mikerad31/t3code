@@ -49,6 +49,9 @@ jobs:
       - name: Apply transactional binding repair patch
         run: python3 scripts/patch-provider-thread-handoff-v2.py
 
+      - name: Update reactor handoff ownership assertion
+        run: python3 scripts/patch-provider-thread-handoff-v2-reactor-test.py
+
       - name: Format
         run: vp fmt
 
@@ -58,8 +61,10 @@ jobs:
             ':!.github/workflows/validate-provider-thread-handoff-v1.yml' \
             ':!scripts/patch-provider-thread-handoff-v1.py' \
             ':!scripts/repair-provider-handoff-semaphore-v1.py' \
-            ':!scripts/patch-provider-thread-handoff-v2.py' | sort > /tmp/actual.txt
+            ':!scripts/patch-provider-thread-handoff-v2.py' \
+            ':!scripts/patch-provider-thread-handoff-v2-reactor-test.py' | sort > /tmp/actual.txt
           cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
           apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
           apps/server/src/provider/Layers/ProviderService.test.ts
           apps/server/src/provider/Layers/ProviderService.ts
