@@ -66,6 +66,41 @@ describe("buildThreadActionMenuItems", () => {
     expect(item).toMatchObject({ label: "Regenerating…", disabled: true });
   });
 
+  it("shows inspection actions only in chat-header menus", () => {
+    expect(allIds(baseState)).not.toContain("inspect-thread");
+    expect(allIds({ ...baseState, chatInspection: true })).toEqual(
+      expect.arrayContaining([
+        "inspect-thread",
+        "expand-all",
+        "collapse-all",
+        "copy-full-thread",
+        "export-thread-markdown",
+        "export-thread-json",
+      ]),
+    );
+  });
+
+  it("separates metadata copy from conversation tools", () => {
+    const items = buildThreadActionMenuItems({ ...baseState, chatInspection: true });
+    const copyDetails = items.find((item) => item.id === "copy");
+    const conversation = items.find((item) => item.id === "inspect-thread");
+
+    expect(copyDetails).toMatchObject({ label: "Copy details", icon: "copy" });
+    expect(copyDetails?.children?.map((item) => item.label)).toEqual(["Path", "Thread ID"]);
+    expect(conversation).toMatchObject({ label: "Conversation", icon: "folder-tree" });
+    expect(conversation?.children?.map((item) => item.label)).toEqual([
+      "Expand all",
+      "Collapse all",
+      "Copy conversation",
+      "Export as Markdown",
+      "Export as JSON",
+    ]);
+    expect(conversation?.children?.find((item) => item.id === "copy-full-thread")).toMatchObject({
+      separatorBefore: true,
+      icon: "copy",
+    });
+  });
+
   it("marks delete as destructive and keeps it last", () => {
     const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
     expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });

@@ -13,6 +13,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
@@ -38,6 +39,17 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
+  return Option.getOrElse(
+    AsyncResult.value(result),
+    () => EMPTY_ENVIRONMENT_THREAD_STATE,
+  ) as EnvironmentThreadState;
+}
+
+export function readEnvironmentThread(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): EnvironmentThreadState {
+  const result = appAtomRegistry.get(environmentThreads.stateAtom(environmentId, threadId));
   return Option.getOrElse(
     AsyncResult.value(result),
     () => EMPTY_ENVIRONMENT_THREAD_STATE,
