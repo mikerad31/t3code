@@ -1,0 +1,109 @@
+name: Validate final stale-history UX transplant
+
+on:
+  push:
+    branches:
+      - validate/stale-history-final-integrated-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply stale-history UX transplant
+        run: python3 .github/tmp-stale-history-final-integrated-v2.py
+
+      - name: Format product files
+        run: |
+          pnpm exec vp fmt \
+            apps/server/src/threadImport/ThreadImportService.test.ts \
+            apps/server/src/threadImport/ThreadImportService.ts \
+            apps/web/src/components/CommandPalette.logic.test.ts \
+            apps/web/src/components/CommandPalette.logic.ts \
+            apps/web/src/components/ThreadImportDialog.tsx \
+            packages/contracts/src/threadImports.ts
+
+      - name: Assert exact six-file product surface
+        run: |
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          apps/web/src/components/CommandPalette.logic.test.ts
+          apps/web/src/components/CommandPalette.logic.ts
+          apps/web/src/components/ThreadImportDialog.tsx
+          packages/contracts/src/threadImports.ts
+          EOF
+          sort -o /tmp/expected.txt /tmp/expected.txt
+          git diff --name-only 63278a9a975b188f84d9ece7c605d805ca423554 \
+            | grep -v '^.github/tmp-stale-history-final-integrated-v2.py$' \
+            | grep -v '^.github/workflows/tmp-stale-history-final-integrated-v2.yml$' \
+            | sort > /tmp/actual.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused stale-history regressions
+        run: |
+          pnpm --filter t3 exec vp test run src/threadImport/ThreadImportService.test.ts
+          pnpm --filter @t3tools/web exec vp test run \
+            src/components/CommandPalette.logic.test.ts \
+            src/components/ChatView.logic.test.ts
+
+      - name: Full web regression suite
+        run: pnpm --filter @t3tools/web exec vp test run
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only 63278a9a975b188f84d9ece7c605d805ca423554 \
+            | grep -v '^.github/tmp-stale-history-final-integrated-v2.py$' \
+            | grep -v '^.github/workflows/tmp-stale-history-final-integrated-v2.yml$' \
+            | sort > /tmp/actual-final.txt
+          diff -u /tmp/expected.txt /tmp/actual-final.txt
+
+      - name: Stage validated product blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/stale-history-final-blobs
+          : > /tmp/stale-history-final-blobs/manifest.txt
+          while IFS= read -r file; do
+            base64 -w0 "$file" > /tmp/blob-content.b64
+            jq -n --rawfile content /tmp/blob-content.b64 \
+              '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+            printf '%s %s\n' "$sha" "$file" | tee -a /tmp/stale-history-final-blobs/manifest.txt
+          done < /tmp/expected.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stale-history-final-integrated-v2-blobs
+          path: /tmp/stale-history-final-blobs/manifest.txt
+          retention-days: 1
