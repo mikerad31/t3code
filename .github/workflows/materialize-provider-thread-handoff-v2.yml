@@ -1,0 +1,84 @@
+name: Materialize validated provider handoff blobs
+
+on:
+  push:
+    branches:
+      - validate/provider-thread-handoff-materialize-v2
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: ${{ !contains(github.event.head_commit.message, '[materialized]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Repair validator patcher tail matchers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/patch-provider-thread-handoff-v1.py")
+          text = p.read_text(encoding="utf-8")
+          old_needle = "needle = '''      ).pipe(\\n"
+          new_needle = "needle = '''      }).pipe(\\n"
+          old_replacement = "replacement = '''      ).pipe(\\n"
+          new_replacement = "replacement = '''      }).pipe(\\n"
+          if text.count(old_needle) != 1 or text.count(old_replacement) != 1:
+              raise SystemExit("expected startSession tail matcher literals not found exactly once")
+          text = text.replace(old_needle, new_needle, 1)
+          text = text.replace(old_replacement, new_replacement, 1)
+          p.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Recreate exact validated product tree
+        run: |
+          python3 scripts/patch-provider-thread-handoff-v1.py
+          python3 scripts/repair-provider-handoff-semaphore-v1.py
+          python3 scripts/patch-provider-thread-handoff-v2.py
+          python3 scripts/patch-provider-thread-handoff-v2-reactor-test.py
+          python3 scripts/patch-provider-thread-handoff-v2-typecheck.py
+          vp fmt
+
+      - name: Verify validated blob manifest
+        run: |
+          cat > /tmp/manifest.txt <<'EOF'
+          e1edab7746a6ad3be8fa76e78606c9fed98a1638 apps/server/integration/orphanedProviderSessionStartup.integration.test.ts
+          0caad3b95de3bf6a7ae22aad8457fd1a0dac1bef apps/server/src/orchestration/Layers/CheckpointReactor.test.ts
+          0a9b8507a3ecdb193c66bdc5968582a7a0322228 apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
+          1c0091028addb7173d66a4d9d0cd0c4ab00f4b7e apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          7e0b1ec071848ca90e0aafd32a2fc89583f7ceb1 apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts
+          f04f4a0a8a54343f0ff3fe080528b312043151db apps/server/src/provider/Layers/ProviderService.test.ts
+          f4f44a218ed211665f76aaa4a07908e20c12ac5f apps/server/src/provider/Layers/ProviderService.ts
+          26f1ac697e299645e9c33f77d6e57eed7df99876 apps/server/src/provider/Layers/ProviderSessionReaper.test.ts
+          624789926fe691570b790d2dafdede08c330427a apps/server/src/provider/Services/ProviderService.ts
+          587e41a38c1ffe0f844e152848dae998b226004b apps/server/src/serverRuntimeStartup.reconcile.test.ts
+          a2ce15693f7ab04e5ea1e7cab497567888160b16 apps/server/src/threadImport/ThreadImportService.test.ts
+          f2a75d210a20b481f62cb319c1a9282199879e1f apps/server/src/threadImport/ThreadImportService.ts
+          e3fe0c1bc7b805607fc80a926bec0ad35ba90e94 apps/server/src/ws.ts
+          EOF
+          while read -r expected path; do
+            actual=$(git hash-object "$path")
+            test "$actual" = "$expected" || { echo "SHA mismatch: $path expected=$expected actual=$actual"; exit 1; }
+          done < /tmp/manifest.txt
+
+      - name: Commit only validated product blobs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cut -d' ' -f2- /tmp/manifest.txt | xargs git add --
+          test "$(git diff --cached --name-only | wc -l)" -eq 13
+          git commit -m "fix: materialize validated provider handoff [materialized]"
+          git push origin HEAD:validate/provider-thread-handoff-materialize-v2
