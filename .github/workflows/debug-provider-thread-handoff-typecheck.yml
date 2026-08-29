@@ -46,6 +46,7 @@ jobs:
           python3 scripts/repair-provider-handoff-semaphore-v1.py
           python3 scripts/patch-provider-thread-handoff-v2.py
           python3 scripts/patch-provider-thread-handoff-v2-reactor-test.py
+          python3 scripts/patch-provider-thread-handoff-v2-typecheck.py
           vp fmt
 
       - name: Capture typecheck
