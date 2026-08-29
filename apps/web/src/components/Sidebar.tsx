@@ -37,11 +37,13 @@ import {
   AlarmClockOffIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronsUpDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
   ClockIcon,
   DownloadIcon,
+  EllipsisIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -126,11 +128,13 @@ import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   animatePinnedLayoutChanges,
   buildBulkTitleRegenerationContextMenuItem,
+  buildSidebarProjectThreadSections,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
+  nextCollapsedProjectSectionKeys,
   orderItemsByPreferredIds,
   planPinnedReorder,
   resolveAdjacentThreadId,
@@ -172,6 +176,7 @@ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
   deriveProviderEntriesByEnvironment,
+  resolveProviderInstanceIdentity,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
@@ -179,7 +184,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -199,6 +204,8 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
+const COLLAPSED_PROJECT_SECTIONS_KEY = "t3code:sidebar-v2:collapsed-project-sections";
+const COLLAPSED_PROJECT_SECTIONS_SCHEMA = Schema.Array(Schema.String);
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -265,7 +272,9 @@ function SidebarThreadTooltip({
   projectFaviconPath,
   environmentLabel,
   providerEntry,
+  providerIdentityLabel,
   showInstanceBadge,
+  showProviderIdentity,
   modelInstanceId,
   modelLabel,
   branchMismatch,
@@ -278,7 +287,9 @@ function SidebarThreadTooltip({
   projectFaviconPath: string | null;
   environmentLabel: string | null;
   providerEntry: ProviderInstanceEntry | null;
+  providerIdentityLabel: string;
   showInstanceBadge: boolean;
+  showProviderIdentity: boolean;
   modelInstanceId: string;
   modelLabel: string;
   branchMismatch: {
@@ -337,9 +348,7 @@ function SidebarThreadTooltip({
             <div className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
                 driverKind={driverKind}
-                displayName={
-                  providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
-                }
+                displayName={providerIdentityLabel}
                 accentColor={providerEntry?.accentColor}
                 // Initials would swallow a size-3 glyph: accent dot, name in label.
                 showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
@@ -348,9 +357,7 @@ function SidebarThreadTooltip({
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
               <div className="min-w-0 truncate text-foreground/75">
-                {showInstanceBadge && providerEntry
-                  ? `${modelLabel} · ${providerEntry.displayName}`
-                  : modelLabel}
+                {showProviderIdentity ? `${modelLabel} · ${providerIdentityLabel}` : modelLabel}
               </div>
             </div>
           ) : null}
@@ -944,6 +951,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -962,7 +979,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
       providerEntry={providerEntry}
+      providerIdentityLabel={providerIdentityLabel}
       showInstanceBadge={showInstanceBadge}
+      showProviderIdentity={showProviderIdentity}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
@@ -1271,6 +1290,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               />
             </span>
             {title}
+            {driverKind && showProviderIdentity ? (
+              <span
+                role="img"
+                aria-label={`Provider ${providerIdentityLabel}`}
+                className="inline-flex shrink-0 items-center"
+              >
+                <ProviderInstanceIcon
+                  driverKind={driverKind}
+                  displayName={providerIdentityLabel}
+                  accentColor={providerEntry?.accentColor}
+                  showBadge
+                  iconClassName="size-3.5 opacity-60"
+                  badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+                />
+              </span>
+            ) : null}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -1583,11 +1618,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
                       driverKind={driverKind}
-                      displayName={
-                        providerEntry?.displayName ??
-                        thread.session?.providerName ??
-                        modelInstanceId
-                      }
+                      displayName={providerIdentityLabel}
                       accentColor={providerEntry?.accentColor}
                       showBadge={showInstanceBadge}
                       // Glyph dims, badge stays saturated; offset matches the composer trigger.
@@ -1652,6 +1683,16 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1699,6 +1740,22 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             fallbackIcon={MessageSquareIcon}
           />
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          {providerEntry?.driverKind && showProviderIdentity ? (
+            <span
+              role="img"
+              aria-label={`Provider ${providerIdentityLabel}`}
+              className="inline-flex shrink-0 items-center"
+            >
+              <ProviderInstanceIcon
+                driverKind={providerEntry.driverKind}
+                displayName={providerIdentityLabel}
+                accentColor={providerEntry.accentColor}
+                showBadge
+                iconClassName="size-3.5 opacity-60"
+                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+              />
+            </span>
+          ) : null}
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
             {threadTimeLabel(thread)}
           </span>
@@ -1710,7 +1767,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
           providerEntry={providerEntry}
+          providerIdentityLabel={providerIdentityLabel}
           showInstanceBadge={showInstanceBadge}
+          showProviderIdentity={showProviderIdentity}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}
           branchMismatch={branchMismatch}
@@ -1721,6 +1780,106 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
     </li>
   );
 });
+
+function SidebarProjectSectionHeader(props: {
+  project: SidebarProjectSnapshot;
+  expanded: boolean;
+  threadCount: number;
+  onToggle: () => void;
+  onCreateThread: (event: ReactMouseEvent<HTMLElement>) => void;
+  onImportConversations: (event: ReactMouseEvent<HTMLElement>) => void;
+  onOpenSettings: (event: ReactMouseEvent<HTMLElement>) => void;
+}) {
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const actionClassName =
+    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring max-sm:size-8";
+
+  return (
+    <div className="group/project-section relative" data-thread-selection-safe>
+      <button
+        type="button"
+        aria-expanded={props.expanded}
+        aria-label={`${props.expanded ? "Collapse" : "Expand"} ${props.project.displayName}`}
+        onClick={props.onToggle}
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[3.5rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring max-sm:pr-[4.5rem]"
+      >
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "size-3.5 shrink-0 text-sidebar-muted-foreground/70 transition-transform",
+            !props.expanded && "-rotate-90",
+          )}
+        />
+        <ProjectFavicon
+          environmentId={props.project.environmentId}
+          cwd={props.project.workspaceRoot}
+          faviconPath={props.project.faviconPath}
+          className="size-4 shrink-0"
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-sidebar-muted-foreground group-hover/project-section:text-sidebar-foreground">
+          {props.project.displayName}
+        </span>
+        {props.project.groupedProjectCount > 1 ? (
+          <span className="shrink-0 text-[10px] text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
+            {props.project.groupedProjectCount} roots
+          </span>
+        ) : null}
+        <span className="min-w-4 shrink-0 text-right text-[10px] tabular-nums text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
+          {props.threadCount}
+        </span>
+      </button>
+      <div
+        className={cn(
+          "pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:right-0 max-sm:top-0 max-sm:pointer-events-auto max-sm:opacity-100",
+          moreMenuOpen && "pointer-events-auto opacity-100",
+        )}
+      >
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={actionClassName}
+                aria-label={`New thread in ${props.project.displayName}`}
+                onClick={props.onCreateThread}
+              />
+            }
+          >
+            <SquarePenIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">New thread</TooltipPopup>
+        </Tooltip>
+        <Menu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
+          <MenuTrigger
+            render={
+              <button
+                type="button"
+                className={actionClassName}
+                aria-label={`More actions for ${props.project.displayName}`}
+              />
+            }
+          >
+            <EllipsisIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="bottom" sideOffset={4} className="min-w-44">
+            <MenuItem
+              render={<button type="button" />}
+              closeOnClick
+              onClick={props.onImportConversations}
+            >
+              <DownloadIcon />
+              <span>Import conversations</span>
+            </MenuItem>
+            <MenuItem render={<button type="button" />} closeOnClick onClick={props.onOpenSettings}>
+              <SettingsIcon />
+              <span>Project settings</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </div>
+    </div>
+  );
+}
 
 export default function Sidebar() {
   const projects = useProjects();
@@ -1969,6 +2128,47 @@ export default function Sidebar() {
       setProjectScopeKey(null);
     }
   }, [projectScopeKey, scopedProjectGroup]);
+  const [collapsedProjectSectionKeys, setCollapsedProjectSectionKeys] = useLocalStorage(
+    COLLAPSED_PROJECT_SECTIONS_KEY,
+    [],
+    COLLAPSED_PROJECT_SECTIONS_SCHEMA,
+  );
+  const collapsedProjectSectionKeySet = useMemo(
+    () => new Set(collapsedProjectSectionKeys),
+    [collapsedProjectSectionKeys],
+  );
+  useEffect(() => {
+    const validProjectKeys = new Set(projectGroups.map((project) => project.projectKey));
+    setCollapsedProjectSectionKeys((current) => {
+      const next = current.filter((projectKey) => validProjectKeys.has(projectKey));
+      return next.length === current.length ? current : next;
+    });
+  }, [projectGroups, setCollapsedProjectSectionKeys]);
+  const toggleProjectSection = useCallback(
+    (projectKey: string) => {
+      setCollapsedProjectSectionKeys((current) =>
+        current.includes(projectKey)
+          ? current.filter((candidate) => candidate !== projectKey)
+          : [...current, projectKey],
+      );
+    },
+    [setCollapsedProjectSectionKeys],
+  );
+  const projectSectionKeys = useMemo(
+    () => projectGroups.map((project) => project.projectKey),
+    [projectGroups],
+  );
+  const allProjectSectionsCollapsed =
+    projectSectionKeys.length > 0 &&
+    projectSectionKeys.every((projectKey) => collapsedProjectSectionKeySet.has(projectKey));
+  const toggleAllProjectSections = useCallback(() => {
+    setCollapsedProjectSectionKeys((current) =>
+      nextCollapsedProjectSectionKeys({
+        projectKeys: projectSectionKeys,
+        collapsedProjectKeys: current,
+      }),
+    );
+  }, [projectSectionKeys, setCollapsedProjectSectionKeys]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -2002,7 +2202,7 @@ export default function Sidebar() {
   }, [clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -2018,13 +2218,36 @@ export default function Sidebar() {
   );
 
   const handleImportConversations = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
       setThreadImportProject(projectGroup);
     },
     [],
+  );
+  const handleCreateProjectThread = useCallback(
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isMobile) setOpenMobile(false);
+      void settlePromise(() =>
+        newThreadContext.handleNewThread(
+          scopeProjectRef(projectGroup.environmentId, projectGroup.id),
+        ),
+      ).then((result) => {
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Could not create thread in ${projectGroup.displayName}`,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      });
+    },
+    [isMobile, newThreadContext, setOpenMobile],
   );
 
   // Settled threads stay in the live shell stream (settled ≠ archived), so
@@ -2255,9 +2478,103 @@ export default function Sidebar() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  const { sections: projectThreadSections, ungroupedThreads } = useMemo(
+    () =>
+      buildSidebarProjectThreadSections({
+        projects: projectGroups,
+        pinnedThreads,
+        activeThreads,
+        snoozedThreads,
+        settledThreads,
+      }),
+    [activeThreads, pinnedThreads, projectGroups, settledThreads, snoozedThreads],
+  );
+  const visibleSnoozedThreadKeySet = useMemo(
+    () =>
+      new Set(
+        visibleSnoozedThreads.map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      ),
+    [visibleSnoozedThreads],
+  );
+  const renderedSettledThreadKeySet = useMemo(
+    () =>
+      new Set(
+        renderedSettledThreads.map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      ),
+    [renderedSettledThreads],
+  );
+  const groupedVisibleThreads = useMemo(() => {
+    const visibleThreads: EnvironmentThreadShell[] = [];
+    for (const section of projectThreadSections) {
+      const visibleSnoozed = section.snoozedThreads.filter((thread) =>
+        visibleSnoozedThreadKeySet.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      );
+      const visibleSettled = section.settledThreads.filter((thread) =>
+        renderedSettledThreadKeySet.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      );
+      const sectionThreads = [
+        ...section.pinnedThreads,
+        ...section.activeThreads,
+        ...visibleSnoozed,
+        ...visibleSettled,
+      ];
+      const routeKeepsSectionExpanded =
+        routeThreadKey !== null &&
+        sectionThreads.some(
+          (thread) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+        );
+      if (
+        !collapsedProjectSectionKeySet.has(section.project.projectKey) ||
+        routeKeepsSectionExpanded
+      ) {
+        visibleThreads.push(...sectionThreads);
+      }
+    }
+    visibleThreads.push(
+      ...ungroupedThreads.pinnedThreads,
+      ...ungroupedThreads.activeThreads,
+      ...ungroupedThreads.snoozedThreads.filter((thread) =>
+        visibleSnoozedThreadKeySet.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      ),
+      ...ungroupedThreads.settledThreads.filter((thread) =>
+        renderedSettledThreadKeySet.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      ),
+    );
+    return visibleThreads;
+  }, [
+    collapsedProjectSectionKeySet,
+    projectThreadSections,
+    renderedSettledThreadKeySet,
+    routeThreadKey,
+    ungroupedThreads,
+    visibleSnoozedThreadKeySet,
+  ]);
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () =>
+      scopedProjectGroup === null
+        ? groupedVisibleThreads
+        : [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
+    [
+      activeThreads,
+      groupedVisibleThreads,
+      pinnedThreads,
+      renderedSettledThreads,
+      scopedProjectGroup,
+      visibleSnoozedThreads,
+    ],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3560,54 +3877,94 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                         <span className="min-w-0 truncate text-sm">All projects</span>
                       </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                          >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Import conversations into ${project.displayName}`}
-                              title={`Import conversations into ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                handleImportConversations(event, project);
-                              }}
-                            >
-                              <DownloadIcon className="size-3.5" />
-                            </Button>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Project settings for ${project.displayName}`}
-                              title={`Project settings for ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectSettings(event, project);
-                              }}
-                            >
-                              <SettingsIcon className="size-3.5" />
-                            </Button>
-                          </MenuRadioItem>
-                        );
-                      })}
+                      {projectGroups.map((project) => (
+                        <MenuRadioItem
+                          key={project.projectKey}
+                          value={project.projectKey}
+                          closeOnClick
+                          className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        >
+                          <ProjectFavicon
+                            environmentId={project.environmentId}
+                            cwd={project.workspaceRoot}
+                            faviconPath={project.faviconPath}
+                            className="size-4 shrink-0"
+                          />
+                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                        </MenuRadioItem>
+                      ))}
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+                {scopedProjectGroup !== null ? (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          type="button"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          aria-label={`Project actions for ${scopedProjectGroup.displayName}`}
+                        />
+                      }
+                    >
+                      <EllipsisIcon />
+                      <span
+                        className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                        aria-hidden="true"
+                      />
+                    </MenuTrigger>
+                    <MenuPopup align="end" className="min-w-44">
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => handleImportConversations(event, scopedProjectGroup)}
+                      >
+                        <DownloadIcon />
+                        <span>Import conversations</span>
+                      </MenuItem>
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => void handleProjectSettings(event, scopedProjectGroup)}
+                      >
+                        <SettingsIcon />
+                        <span>Project settings</span>
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
+                ) : null}
+                {scopedProjectGroup === null && projectGroups.length > 1 ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          onClick={toggleAllProjectSections}
+                          type="button"
+                          aria-label={
+                            allProjectSectionsCollapsed
+                              ? "Expand all projects"
+                              : "Collapse all projects"
+                          }
+                        />
+                      }
+                    >
+                      <ChevronsUpDownIcon
+                        className={cn(
+                          "transition-transform",
+                          allProjectSectionsCollapsed && "rotate-90",
+                        )}
+                      />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">
+                      {allProjectSectionsCollapsed
+                        ? "Expand all projects"
+                        : "Collapse all projects"}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -3866,6 +4223,179 @@ export default function Sidebar() {
                       </li>
                     ) : null,
                   ];
+                  if (scopedProjectGroup === null) {
+                    for (const section of projectThreadSections) {
+                      const visibleSnoozed = section.snoozedThreads.filter((thread) =>
+                        visibleSnoozedThreadKeySet.has(
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        ),
+                      );
+                      const visibleSettled = section.settledThreads.filter((thread) =>
+                        renderedSettledThreadKeySet.has(
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        ),
+                      );
+                      const threadCount =
+                        section.pinnedThreads.length +
+                        section.activeThreads.length +
+                        section.snoozedThreads.length +
+                        section.settledThreads.length;
+                      const routeKeepsSectionExpanded =
+                        routeThreadKey !== null &&
+                        [
+                          ...section.pinnedThreads,
+                          ...section.activeThreads,
+                          ...visibleSnoozed,
+                          ...visibleSettled,
+                        ].some(
+                          (thread) =>
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
+                            routeThreadKey,
+                        );
+                      const sectionExpanded =
+                        routeKeepsSectionExpanded ||
+                        !collapsedProjectSectionKeySet.has(section.project.projectKey);
+                      items.push(
+                        <li
+                          key={`project-section:${section.project.projectKey}`}
+                          data-thread-selection-safe
+                          className="mt-2 list-none first:mt-0"
+                        >
+                          <SidebarProjectSectionHeader
+                            project={section.project}
+                            expanded={sectionExpanded}
+                            threadCount={threadCount}
+                            onToggle={() => toggleProjectSection(section.project.projectKey)}
+                            onCreateThread={(event) =>
+                              handleCreateProjectThread(event, section.project)
+                            }
+                            onImportConversations={(event) =>
+                              handleImportConversations(event, section.project)
+                            }
+                            onOpenSettings={(event) =>
+                              void handleProjectSettings(event, section.project)
+                            }
+                          />
+                          {sectionExpanded ? (
+                            <ul
+                              role="list"
+                              aria-label={`${section.project.displayName} threads`}
+                              className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/50 pl-1.5"
+                            >
+                              {section.pinnedThreads.map((thread) =>
+                                renderThreadRow(thread, "pinned"),
+                              )}
+                              {section.pinnedThreads.length > 0 &&
+                              section.activeThreads.length > 0 ? (
+                                <li
+                                  aria-hidden
+                                  className="mx-2 my-1 h-px list-none bg-sidebar-border/45"
+                                />
+                              ) : null}
+                              {section.activeThreads.map((thread) =>
+                                renderThreadRow(thread, "active"),
+                              )}
+                              {section.snoozedThreads.length > 0 ? (
+                                <li data-thread-selection-safe className="list-none">
+                                  <button
+                                    type="button"
+                                    onClick={toggleSnoozedShelf}
+                                    aria-expanded={snoozedShelfExpanded}
+                                    className="mb-0.5 mt-2 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                                  >
+                                    <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                                      {snoozedShelfExpanded
+                                        ? "Snoozed"
+                                        : `Snoozed (${section.snoozedThreads.length})`}
+                                    </span>
+                                    <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
+                                  </button>
+                                </li>
+                              ) : null}
+                              {visibleSnoozed.map((thread) => renderThreadRow(thread, "snoozed"))}
+                              {section.settledThreads.length > 0 ? (
+                                <li data-thread-selection-safe className="list-none">
+                                  <button
+                                    type="button"
+                                    onClick={toggleSettledShelf}
+                                    aria-expanded={settledShelfExpanded}
+                                    className="mb-0.5 mt-2 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
+                                  >
+                                    <span className="text-[11px] font-medium text-muted-foreground/50">
+                                      {settledShelfExpanded
+                                        ? "Settled"
+                                        : `Settled (${section.settledThreads.length})`}
+                                    </span>
+                                    <span className="h-px flex-1 bg-sidebar-border/60" />
+                                  </button>
+                                </li>
+                              ) : null}
+                              {visibleSettled.map((thread) => renderThreadRow(thread, "settled"))}
+                              {threadCount === 0 ? (
+                                <li className="list-none px-2.5 py-2 text-xs text-sidebar-muted-foreground/50">
+                                  No conversations yet
+                                </li>
+                              ) : null}
+                            </ul>
+                          ) : null}
+                        </li>,
+                      );
+                    }
+
+                    const visibleUngroupedSnoozed = ungroupedThreads.snoozedThreads.filter(
+                      (thread) =>
+                        visibleSnoozedThreadKeySet.has(
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        ),
+                    );
+                    const visibleUngroupedSettled = ungroupedThreads.settledThreads.filter(
+                      (thread) =>
+                        renderedSettledThreadKeySet.has(
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        ),
+                    );
+                    const ungroupedCount =
+                      ungroupedThreads.pinnedThreads.length +
+                      ungroupedThreads.activeThreads.length +
+                      ungroupedThreads.snoozedThreads.length +
+                      ungroupedThreads.settledThreads.length;
+                    if (ungroupedCount > 0) {
+                      items.push(
+                        <li
+                          key="project-section:ungrouped"
+                          data-thread-selection-safe
+                          className="mt-2 list-none"
+                        >
+                          <div className="flex h-8 items-center gap-2 px-2 text-xs font-semibold text-sidebar-muted-foreground">
+                            <FolderIcon className="size-4 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate">Other threads</span>
+                            <span className="min-w-4 shrink-0 text-right text-[10px] tabular-nums text-sidebar-muted-foreground/45">
+                              {ungroupedCount}
+                            </span>
+                          </div>
+                          <ul
+                            role="list"
+                            aria-label="Other threads"
+                            className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/50 pl-1.5"
+                          >
+                            {ungroupedThreads.pinnedThreads.map((thread) =>
+                              renderThreadRow(thread, "pinned"),
+                            )}
+                            {ungroupedThreads.activeThreads.map((thread) =>
+                              renderThreadRow(thread, "active"),
+                            )}
+                            {visibleUngroupedSnoozed.map((thread) =>
+                              renderThreadRow(thread, "snoozed"),
+                            )}
+                            {visibleUngroupedSettled.map((thread) =>
+                              renderThreadRow(thread, "settled"),
+                            )}
+                          </ul>
+                        </li>,
+                      );
+                    }
+                    return items;
+                  }
                   if (pinnedThreads.length > 0) {
                     items.push(
                       <li

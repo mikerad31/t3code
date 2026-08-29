@@ -31,17 +31,67 @@ import {
 } from "../state/entities";
 import { readLocalApi } from "../localApi";
 import { useUiStateStore } from "../uiStateStore";
+import { downloadTextFile, loadCompleteThread } from "../threadInspection";
+import { publishThreadDisclosureCommand } from "../threadInspectionBus";
+import {
+  formatThreadJson,
+  formatThreadMarkdown,
+  threadExportBaseName,
+} from "../threadExport.logic";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
-function failureToast(title: string, error: unknown) {
+const THREAD_PREPARATION_FEEDBACK_DELAY_MS = 450;
+const THREAD_PREPARATION_TOAST_TIMEOUT_MS = 65_000;
+
+function failureToast(title: string, error: unknown, threadRef?: ScopedThreadRef) {
   toastManager.add(
     stackedThreadToast({
       type: "error",
       title,
       description: error instanceof Error ? error.message : "An error occurred.",
+      ...(threadRef === undefined ? {} : { data: { threadRef } }),
+    }),
+  );
+}
+
+async function loadCompleteThreadWithFeedback(threadRef: ScopedThreadRef, title: string) {
+  let loadingToastId: ReturnType<typeof toastManager.add> | null = null;
+  const loadingTimer = window.setTimeout(() => {
+    loadingToastId = toastManager.add(
+      stackedThreadToast({
+        type: "loading",
+        title,
+        timeout: THREAD_PREPARATION_TOAST_TIMEOUT_MS,
+        data: { threadRef, hideCopyButton: true },
+      }),
+    );
+  }, THREAD_PREPARATION_FEEDBACK_DELAY_MS);
+
+  try {
+    return await loadCompleteThread(threadRef);
+  } finally {
+    window.clearTimeout(loadingTimer);
+    if (loadingToastId !== null) {
+      toastManager.close(loadingToastId);
+    }
+  }
+}
+
+function exportedThreadToast(
+  threadRef: ScopedThreadRef,
+  format: "Markdown" | "JSON",
+  filename: string,
+) {
+  toastManager.add(
+    stackedThreadToast({
+      type: "success",
+      title: `${format} exported`,
+      description: filename,
+      timeout: 3_500,
+      data: { threadRef, hideCopyButton: true },
     }),
   );
 }
@@ -104,6 +154,13 @@ export function useThreadActionMenu(input: {
     },
     onError: (error) => failureToast("Failed to copy thread ID", error),
   });
+  const { copyToClipboard: copyFullThreadToClipboard } = useCopyToClipboard<{ title: string }>({
+    target: "thread",
+    onCopy: ({ title }) => {
+      toastManager.add({ type: "success", title: "Full thread copied", description: title });
+    },
+    onError: (error) => failureToast("Failed to copy full thread", error),
+  });
 
   const openMenu = useCallback(
     (position: { x: number; y: number }) => {
@@ -142,6 +199,7 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
+          chatInspection: true,
           supports,
           snoozePresets,
         });
@@ -256,6 +314,60 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "expand-all":
+          case "collapse-all":
+            publishThreadDisclosureCommand(scopedThreadKey(threadRef), action);
+            return;
+          case "copy-full-thread": {
+            try {
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing full thread…",
+              );
+              copyFullThreadToClipboard(formatThreadMarkdown(completeThread), {
+                title: completeThread.title,
+              });
+            } catch (error) {
+              failureToast("Failed to copy full thread", error, threadRef);
+            }
+            return;
+          }
+          case "export-thread-markdown": {
+            try {
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing Markdown export…",
+              );
+              const filename = `${threadExportBaseName(completeThread)}.md`;
+              downloadTextFile({
+                filename,
+                text: formatThreadMarkdown(completeThread),
+                mimeType: "text/markdown;charset=utf-8",
+              });
+              exportedThreadToast(threadRef, "Markdown", filename);
+            } catch (error) {
+              failureToast("Failed to export Markdown", error, threadRef);
+            }
+            return;
+          }
+          case "export-thread-json": {
+            try {
+              const completeThread = await loadCompleteThreadWithFeedback(
+                threadRef,
+                "Preparing JSON export…",
+              );
+              const filename = `${threadExportBaseName(completeThread)}.json`;
+              downloadTextFile({
+                filename,
+                text: formatThreadJson(completeThread),
+                mimeType: "application/json;charset=utf-8",
+              });
+              exportedThreadToast(threadRef, "JSON", filename);
+            } catch (error) {
+              failureToast("Failed to export JSON", error, threadRef);
+            }
+            return;
+          }
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -316,6 +428,7 @@ export function useThreadActionMenu(input: {
       confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
+      copyFullThreadToClipboard,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,

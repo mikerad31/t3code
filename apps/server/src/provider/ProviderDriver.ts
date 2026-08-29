@@ -25,6 +25,7 @@ import type {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
+  ProviderRateLimitResetCreditOutcome,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
@@ -53,6 +54,18 @@ export interface ProviderDriverMetadata {
   readonly supportsMultipleInstances?: boolean;
 }
 
+export interface ProviderAccountActions {
+  /**
+   * Consume one earned/banked rate-limit reset for this exact provider
+   * instance. The implementation must use the instance's captured account
+   * environment (for Codex, its effective CODEX_HOME) and must not fall back
+   * to a driver-global/default account.
+   */
+  readonly consumeRateLimitResetCredit?: (input: {
+    readonly idempotencyKey: string;
+  }) => Effect.Effect<ProviderRateLimitResetCreditOutcome, ProviderDriverError>;
+}
+
 /**
  * One materialized provider instance. Held by the registry, looked up by
  * `instanceId`, torn down by closing the scope it was created in.
@@ -73,6 +86,7 @@ export interface ProviderInstance {
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
   /** Optional provider-native persisted-conversation import capability. */
   readonly threadImport?: ProviderThreadImportShape;
+  readonly accountActions?: ProviderAccountActions;
 }
 
 export interface ProviderContinuationIdentity {

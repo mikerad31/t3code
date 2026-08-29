@@ -38,6 +38,7 @@ import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
 import { makeCodexThreadImport } from "../Layers/CodexThreadImport.ts";
+import { consumeCodexRateLimitResetCredit } from "../Layers/CodexRateLimitResetCredit.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -223,6 +224,24 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
       );
 
+      const consumeRateLimitResetCredit = (input: { readonly idempotencyKey: string }) =>
+        consumeCodexRateLimitResetCredit({
+          settings: effectiveConfig,
+          environment: processEnv,
+          idempotencyKey: input.idempotencyKey,
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: `Failed to consume banked rate-limit reset: ${cause.message ?? String(cause)}`,
+                cause,
+              }),
+          ),
+        );
+
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -234,6 +253,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         adapter,
         textGeneration,
         threadImport,
+        accountActions: { consumeRateLimitResetCredit },
       } satisfies ProviderInstance;
     }),
 };

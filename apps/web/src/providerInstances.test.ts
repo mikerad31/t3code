@@ -8,6 +8,7 @@ import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
   resolveDefaultProviderModelSelection,
+  resolveProviderInstanceIdentity,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
 } from "./providerInstances";
@@ -132,6 +133,69 @@ describe("deriveProviderInstanceEntries", () => {
     expect(entry?.instanceId).toBe("codex_personal");
     expect(entry?.driverKind).toBe("codex");
     expect(entry?.isDefault).toBe(false);
+  });
+});
+
+describe("resolveProviderInstanceIdentity", () => {
+  it("labels generic sibling Codex instances A1, A2, and A3", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        displayName: "Codex",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_a2",
+        displayName: "Codex",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_a3",
+        displayName: "Codex",
+      }),
+    ]);
+
+    expect(entries.map((entry) => resolveProviderInstanceIdentity(entry, entries))).toEqual([
+      { label: "A1", shouldDisplay: true },
+      { label: "A2", shouldDisplay: true },
+      { label: "A3", shouldDisplay: true },
+    ]);
+  });
+
+  it("preserves an explicit account name when sibling instances exist", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        displayName: "Codex",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_work",
+        displayName: "Work",
+      }),
+    ]);
+
+    expect(resolveProviderInstanceIdentity(entries[1]!, entries)).toEqual({
+      label: "Work",
+      shouldDisplay: true,
+    });
+  });
+
+  it("stays visually quiet when a driver has only one configured instance", () => {
+    const [entry] = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        displayName: "Codex",
+      }),
+    ]);
+
+    expect(entry && resolveProviderInstanceIdentity(entry, [entry])).toEqual({
+      label: "Codex",
+      shouldDisplay: false,
+    });
   });
 });
 

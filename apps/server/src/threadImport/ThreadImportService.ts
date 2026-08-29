@@ -255,12 +255,19 @@ export const makeThreadImportService = (input: {
                 Effect.orElseSucceed(() => undefined),
               )
             : undefined;
+          const persistedThread = transcriptAlreadyImported
+            ? yield* projection.getThreadShellById(threadId).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.orElseSucceed(() => undefined),
+              )
+            : undefined;
           const nativeResumeReady =
             !transcriptAlreadyImported ||
-            hasMatchingCodexResumeBinding(persistedBinding, {
-              providerInstanceId: instance.instanceId,
-              externalThreadId: source.externalThreadId,
-            });
+            (persistedThread?.modelSelection.instanceId === instance.instanceId &&
+              hasMatchingCodexResumeBinding(persistedBinding, {
+                providerInstanceId: instance.instanceId,
+                externalThreadId: source.externalThreadId,
+              }));
           const repairWarnings =
             transcriptAlreadyImported && !nativeResumeReady
               ? [
@@ -343,6 +350,7 @@ export const makeThreadImportService = (input: {
             Effect.orElseSucceed(() => undefined),
           );
           if (
+            existingThread?.modelSelection.instanceId === source.instance.instanceId &&
             hasMatchingCodexResumeBinding(persistedBinding, {
               providerInstanceId: source.instance.instanceId,
               externalThreadId: source.candidate.externalThreadId,
@@ -392,14 +400,17 @@ export const makeThreadImportService = (input: {
           continue;
         }
 
-        const modelSelection =
-          existingThread !== undefined
+        const existingModelSelection =
+          existingThread?.modelSelection.instanceId === source.instance.instanceId
             ? existingThread.modelSelection
-            : modelSelectionFor(
-                source.instance.instanceId,
-                yield* source.instance.snapshot.getSnapshot,
-                project.defaultModelSelection,
-              );
+            : undefined;
+        const modelSelection =
+          existingModelSelection ??
+          modelSelectionFor(
+            source.instance.instanceId,
+            yield* source.instance.snapshot.getSnapshot,
+            project.defaultModelSelection,
+          );
         const runtimeMode = existingThread?.runtimeMode ?? request.runtimeMode;
         let materializedBeforeBinding = transcriptAlreadyImported;
 
@@ -440,6 +451,39 @@ export const makeThreadImportService = (input: {
           }
         }
 
+        if (
+          materializedBeforeBinding &&
+          existingThread !== undefined &&
+          existingThread.modelSelection.instanceId !== source.instance.instanceId
+        ) {
+          const repairTimestamp = yield* nowIso;
+          const metadataRepairResult = yield* Effect.result(
+            engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.make(
+                `import-provider-repair:${stableHash(
+                  `${String(candidateId)}\0${repairTimestamp}`,
+                ).slice(0, 40)}`,
+              ),
+              threadId,
+              modelSelection,
+            }),
+          );
+          if (Result.isFailure(metadataRepairResult)) {
+            results.push({
+              candidateId,
+              status: "transcript-only",
+              threadId,
+              importedMessageCount: 0,
+              warnings: [...transcript.warnings],
+              error:
+                "The transcript is already imported, but its Codex provider instance could not be restored.",
+            });
+            continue;
+          }
+          existingThread = { ...existingThread, modelSelection };
+        }
+
         let status: ThreadImportItemResult["status"] = materializedBeforeBinding
           ? "already-imported"
           : "imported";
@@ -453,7 +497,7 @@ export const makeThreadImportService = (input: {
             runtimeMode: existingThread?.runtimeMode ?? runtimeMode,
             runtimePayload: {
               cwd: transcript.sourceCwd,
-              modelSelection: existingThread?.modelSelection ?? modelSelection,
+              modelSelection,
             },
           }),
         );

@@ -32,6 +32,14 @@ const KNOWN_SHARED_DIRECTORIES = [
 const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "models_cache.json"]);
 const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "tmp"]);
 const REPLACEABLE_SHARED_RUNTIME_DIRECTORIES = new Set(["mcp-oauth-locks"]);
+const REPLACEABLE_SHARED_RUNTIME_FILE_SUFFIXES = [".sqlite-shm", ".sqlite-wal"] as const;
+
+function isReplaceableSharedRuntimeEntry(entryName: string): boolean {
+  return (
+    REPLACEABLE_SHARED_RUNTIME_DIRECTORIES.has(entryName) ||
+    REPLACEABLE_SHARED_RUNTIME_FILE_SUFFIXES.some((suffix) => entryName.endsWith(suffix))
+  );
+}
 
 function resolveHomePath(path: Path.Path, value: string | undefined): string {
   const expanded =
@@ -243,7 +251,7 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
   );
 
   if (state._tag === "NotSymlink") {
-    if (!REPLACEABLE_SHARED_RUNTIME_DIRECTORIES.has(input.entryName)) {
+    if (!isReplaceableSharedRuntimeEntry(input.entryName)) {
       return yield* new CodexShadowHomeEntryConflictError({
         sharedHomePath: input.sharedHomePath,
         effectiveHomePath: input.effectiveHomePath,
