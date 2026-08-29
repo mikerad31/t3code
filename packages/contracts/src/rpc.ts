@@ -75,6 +75,9 @@ import {
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
 import {
+  ProviderConsumeRateLimitResetCreditError,
+  ProviderConsumeRateLimitResetCreditInput,
+  ProviderConsumeRateLimitResetCreditResult,
   ProviderUploadFeedbackError,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -235,6 +238,7 @@ export const WS_METHODS = {
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
+  providerConsumeRateLimitResetCredit: "provider.consumeRateLimitResetCredit",
 
   // Thread import methods
   threadImportsScan: "threadImports.scan",
@@ -722,6 +726,14 @@ export const WsThreadImportsCommitRpc = Rpc.make(WS_METHODS.threadImportsCommit,
   success: ThreadImportCommitResult,
   error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
 });
+export const WsProviderConsumeRateLimitResetCreditRpc = Rpc.make(
+  WS_METHODS.providerConsumeRateLimitResetCredit,
+  {
+    payload: ProviderConsumeRateLimitResetCreditInput,
+    success: ProviderConsumeRateLimitResetCreditResult,
+    error: Schema.Union([ProviderConsumeRateLimitResetCreditError, EnvironmentAuthorizationError]),
+  },
+);
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
@@ -1097,6 +1109,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderUploadFeedbackRpc,
   WsThreadImportsScanRpc,
   WsThreadImportsCommitRpc,
+  WsProviderConsumeRateLimitResetCreditRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
