@@ -1,0 +1,92 @@
+name: Validate archived import propagation v1
+
+on:
+  push:
+    branches:
+      - validate/archive-import-propagation-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply archived import regression
+        run: python3 .github/tmp-archive-import-propagation-v1.py
+
+      - name: Format product test
+        run: pnpm exec vp fmt apps/server/src/threadImport/ThreadImportService.test.ts
+
+      - name: Assert exact one-file product surface
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "1d21a9044af87adb0eb2095e6f903650b56a040d"
+          git diff --name-only origin/main...HEAD \
+            | grep -v '^.github/tmp-archive-import-propagation-v1.py$' \
+            | grep -v '^.github/workflows/tmp-validate-archive-import-propagation-v1.yml$' \
+            | sort > /tmp/committed-product.txt
+          test ! -s /tmp/committed-product.txt
+          git diff --name-only \
+            | grep -v '^.github/tmp-archive-import-propagation-v1.py$' \
+            | grep -v '^.github/workflows/tmp-validate-archive-import-propagation-v1.yml$' \
+            | sort > /tmp/working-product.txt
+          printf '%s\n' 'apps/server/src/threadImport/ThreadImportService.test.ts' > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/working-product.txt
+
+      - name: Repository conformance
+        run: pnpm exec vp check
+
+      - name: Focused archived import regression
+        run: pnpm --filter t3 exec vp test run src/threadImport/ThreadImportService.test.ts
+
+      - name: Full server regression suite
+        run: pnpm --filter t3 test
+
+      - name: Full monorepo typecheck
+        run: pnpm typecheck
+
+      - name: Final diff sanity
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --name-only \
+            | grep -v '^.github/tmp-archive-import-propagation-v1.py$' \
+            | grep -v '^.github/workflows/tmp-validate-archive-import-propagation-v1.yml$' \
+            | sort > /tmp/actual-final.txt
+          diff -u /tmp/expected.txt /tmp/actual-final.txt
+
+      - name: Stage validated test blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/archive-import-coverage-blobs
+          file='apps/server/src/threadImport/ThreadImportService.test.ts'
+          base64 -w0 "$file" > /tmp/blob-content.b64
+          jq -n --rawfile content /tmp/blob-content.b64 \
+            '{content: $content, encoding: "base64"}' > /tmp/blob-request.json
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --method POST --input /tmp/blob-request.json --jq .sha)"
+          printf '%s %s\n' "$sha" "$file" > /tmp/archive-import-coverage-blobs/manifest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-import-propagation-v1-blob
+          path: /tmp/archive-import-coverage-blobs/manifest.txt
+          retention-days: 1
