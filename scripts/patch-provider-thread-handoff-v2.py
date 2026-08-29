@@ -1,0 +1,95 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected exactly one match, found {count}\n--- needle ---\n{old[:800]}")
+    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+service = "apps/server/src/provider/Services/ProviderService.ts"
+replace_once(
+    service,
+    '''import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";\nimport type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";\n''',
+    '''import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";\nimport type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";\nimport type { ProviderRuntimeBinding } from "./ProviderSessionDirectory.ts";\n''',
+)
+replace_once(
+    service,
+    '''  readonly stopSession: (\n    input: ProviderStopSessionInput,\n  ) => Effect.Effect<void, ProviderServiceError>;\n\n  /**\n   * List active provider sessions.\n''',
+    '''  readonly stopSession: (\n    input: ProviderStopSessionInput,\n  ) => Effect.Effect<void, ProviderServiceError>;\n\n  /**\n   * Quiesce every live provider writer for a thread, replace its canonical\n   * persisted binding, then run a repair effect while the same per-thread\n   * lifecycle lock is still held. This is intentionally internal orchestration\n   * plumbing for importer/provider repair paths, not a transport RPC.\n   */\n  readonly reconcileSessionBinding: <A, E, R>(\n    binding: ProviderRuntimeBinding,\n    afterBindingCommit: Effect.Effect<A, E, R>,\n  ) => Effect.Effect<A, ProviderServiceError | E, R>;\n\n  /**\n   * List active provider sessions.\n''',
+)
+
+provider = "apps/server/src/provider/Layers/ProviderService.ts"
+replace_once(
+    provider,
+    '''  const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(\n''',
+    '''  const reconcileSessionBinding: ProviderServiceMethod<"reconcileSessionBinding"> = (\n    binding,\n    afterBindingCommit,\n  ) =>\n    withThreadHandoffLock(\n      binding.threadId,\n      Effect.gen(function* () {\n        const providerInstanceId = yield* requireBindingInstanceId(\n          "ProviderService.reconcileSessionBinding",\n          binding,\n        );\n        yield* Effect.logInfo("provider.thread-handoff", {\n          threadId: binding.threadId,\n          oldInstance: null,\n          newInstance: providerInstanceId,\n          phase: "repair-binding",\n        });\n        // Import repair is a quiescent operation: no live adapter, including the\n        // desired one, may retain this T3 thread while canonical persisted resume\n        // state is replaced. stopStaleSessionsForThread verifies release.\n        yield* stopStaleSessionsForThread({\n          threadId: binding.threadId,\n          desiredInstanceId: providerInstanceId,\n        });\n        yield* clearMcpSession(binding.threadId);\n        yield* directory.upsert({ ...binding, providerInstanceId });\n        return yield* afterBindingCommit;\n      }),\n    );\n\n  const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(\n''',
+)
+replace_once(
+    provider,
+    '''    stopSession,\n    listSessions,\n''',
+    '''    stopSession,\n    reconcileSessionBinding,\n    listSessions,\n''',
+)
+
+thread_import = "apps/server/src/threadImport/ThreadImportService.ts"
+p = Path(thread_import)
+text = p.read_text(encoding="utf-8")
+start_marker = '''        if (materializedBeforeBinding) {\n          const stopResult = yield* Effect.result(providerService.stopSession({ threadId }));\n'''
+start = text.find(start_marker)
+if start < 0:
+    raise SystemExit("ThreadImportService: v1 repair stop block was not found")
+end_marker = '''        const warnings = [...transcript.warnings];\n'''
+end = text.find(end_marker, start)
+if end < 0:
+    raise SystemExit("ThreadImportService: warnings boundary was not found")
+new_core = '''        const needsMetadataRepair =\n          materializedBeforeBinding &&\n          existingThread !== undefined &&\n          existingThread.modelSelection.instanceId !== source.instance.instanceId;\n        const metadataRepair = needsMetadataRepair\n          ? Effect.gen(function* () {\n              const repairTimestamp = yield* nowIso;\n              yield* engine.dispatch({\n                type: "thread.meta.update",\n                commandId: CommandId.make(\n                  `import-provider-repair:${stableHash(\n                    `${String(candidateId)}\\0${repairTimestamp}`,\n                  ).slice(0, 40)}`,\n                ),\n                threadId,\n                modelSelection,\n              });\n            })\n          : Effect.void;\n\n        let status: ThreadImportItemResult["status"] = materializedBeforeBinding\n          ? "already-imported"\n          : "imported";\n        const bindingResult = yield* Effect.result(\n          providerService.reconcileSessionBinding(\n            {\n              threadId,\n              provider: CODEX_DRIVER,\n              providerInstanceId: source.instance.instanceId,\n              status: "stopped",\n              resumeCursor: transcript.resumeCursor,\n              runtimeMode: existingThread?.runtimeMode ?? runtimeMode,\n              runtimePayload: {\n                cwd: transcript.sourceCwd,\n                modelSelection,\n              },\n            },\n            metadataRepair,\n          ),\n        );\n        if (\n          Result.isSuccess(bindingResult) &&\n          needsMetadataRepair &&\n          existingThread !== undefined\n        ) {\n          existingThread = { ...existingThread, modelSelection };\n        }\n'''
+text = text[:start] + new_core + text[end:]
+p.write_text(text, encoding="utf-8")
+
+provider_test = "apps/server/src/provider/Layers/ProviderService.test.ts"
+p = Path(provider_test)
+text = p.read_text(encoding="utf-8")
+old_start = text.find(
+    '  it.effect("dies when an active session conflicts with its persisted binding", () =>\n'
+)
+old_end = text.find(
+    '  it.effect("stops stale sessions in other providers after a successful replacement start", () =>\n',
+    old_start,
+)
+if old_start < 0 or old_end < 0:
+    raise SystemExit("ProviderService.test: stale-binding legacy test boundary drifted")
+replacement = '''  it.effect("reports live session truth when persisted binding is stale", () =>\n    Effect.gen(function* () {\n      const provider = yield* ProviderService.ProviderService;\n      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;\n      const threadId = asThreadId("thread-binding-mismatch");\n\n      yield* provider.startSession(threadId, {\n        provider: ProviderDriverKind.make("codex"),\n        providerInstanceId: codexInstanceId,\n        threadId,\n        cwd: "/tmp/project-binding-mismatch",\n        runtimeMode: "full-access",\n      });\n      yield* directory.upsert({\n        threadId,\n        provider: ProviderDriverKind.make("claudeAgent"),\n        providerInstanceId: claudeAgentInstanceId,\n        runtimeMode: "full-access",\n      });\n\n      const sessions = yield* provider.listSessions();\n      const live = sessions.filter((session) => session.threadId === threadId);\n      assert.equal(live.length, 1);\n      assert.equal(live[0]?.provider, CODEX_DRIVER);\n      assert.equal(live[0]?.providerInstanceId, codexInstanceId);\n\n      yield* directory.upsert({\n        threadId,\n        provider: ProviderDriverKind.make("codex"),\n        providerInstanceId: codexInstanceId,\n        runtimeMode: "full-access",\n      });\n    }),\n  );\n\n'''
+text = text[:old_start] + replacement + text[old_end:]
+
+routing_marker = 'const routing = makeProviderServiceLayer();\n'
+if text.count(routing_marker) != 1:
+    raise SystemExit("ProviderService.test: routing fixture marker drifted")
+helper = '''function makeMultiCodexProviderServiceLayer() {\n  const a2Id = ProviderInstanceId.make("codex_a2");\n  const a3Id = ProviderInstanceId.make("codex_a3");\n  const a2 = makeFakeCodexAdapter(CODEX_DRIVER);\n  const a3 = makeFakeCodexAdapter(CODEX_DRIVER);\n  const byInstance = new Map([\n    [a2Id, a2.adapter],\n    [a3Id, a3.adapter],\n  ]);\n  const unsupported = () =>\n    new ProviderUnsupportedError({\n      provider: CODEX_DRIVER,\n    });\n  const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {\n    getByInstance: (instanceId) => {\n      const adapter = byInstance.get(instanceId);\n      return adapter ? Effect.succeed(adapter) : Effect.fail(unsupported());\n    },\n    getInstanceInfo: (instanceId) =>\n      byInstance.has(instanceId)\n        ? Effect.succeed({\n            instanceId,\n            driverKind: CODEX_DRIVER,\n            displayName: instanceId === a2Id ? "A2" : "A3",\n            enabled: true,\n            continuationIdentity: {\n              driverKind: CODEX_DRIVER,\n              continuationKey: `codex:test-home:${instanceId}`,\n            },\n          })\n        : Effect.fail(unsupported()),\n    listInstances: () => Effect.succeed([a2Id, a3Id]),\n    listProviders: () => Effect.succeed([CODEX_DRIVER] as const),\n    streamChanges: Stream.empty,\n    subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>\n      PubSub.subscribe(pubsub),\n    ),\n  };\n  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(\n    Layer.provide(SqlitePersistenceMemory),\n  );\n  const directoryLayer = ProviderSessionDirectoryLive.pipe(\n    Layer.provide(runtimeRepositoryLayer),\n  );\n  const layer = it.layer(\n    Layer.mergeAll(\n      makeProviderServiceLive().pipe(\n        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),\n        Layer.provide(directoryLayer),\n        Layer.provide(defaultServerSettingsLayer),\n        Layer.provide(serverConfigTestLayer),\n        Layer.provideMerge(AnalyticsService.layerTest),\n        Layer.provide(\n          Layer.succeed(\n            ProviderEventLoggers.ProviderEventLoggers,\n            ProviderEventLoggers.NoOpProviderEventLoggers,\n          ),\n        ),\n      ),\n      directoryLayer,\n      runtimeRepositoryLayer,\n      NodeServices.layer,\n    ),\n  );\n  return { a2Id, a3Id, a2, a3, layer };\n}\n\nconst multiCodex = makeMultiCodexProviderServiceLayer();\n\n'''
+text = text.replace(routing_marker, helper + routing_marker, 1)
+
+routing_layer_marker = 'routing.layer("ProviderServiceLive routing", (it) => {\n'
+if text.count(routing_layer_marker) != 1:
+    raise SystemExit("ProviderService.test: routing layer marker drifted")
+multi_tests = '''multiCodex.layer("ProviderServiceLive multi-Codex handoff", (it) => {\n  it.effect("resumes the canonical A2 cursor after stale A3 live state", () =>\n    Effect.gen(function* () {\n      const provider = yield* ProviderService.ProviderService;\n      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;\n      const threadId = asThreadId("thread-a3-to-a2");\n      const a3Cursor = { threadId: "native-a3-thread" };\n      const a2Cursor = { threadId: "native-a2-original-thread" };\n\n      yield* provider.startSession(threadId, {\n        provider: CODEX_DRIVER,\n        providerInstanceId: multiCodex.a3Id,\n        threadId,\n        cwd: "/tmp/project-a3",\n        runtimeMode: "full-access",\n        resumeCursor: a3Cursor,\n      });\n      yield* directory.upsert({\n        threadId,\n        provider: CODEX_DRIVER,\n        providerInstanceId: multiCodex.a2Id,\n        status: "stopped",\n        runtimeMode: "full-access",\n        resumeCursor: a2Cursor,\n        runtimePayload: { cwd: "/tmp/project-a2" },\n      });\n\n      multiCodex.a2.startSession.mockClear();\n      multiCodex.a3.stopSession.mockClear();\n      yield* provider.sendTurn({\n        threadId,\n        input: "continue on canonical A2",\n        attachments: [],\n      });\n\n      assert.deepEqual(multiCodex.a3.stopSession.mock.calls, [[threadId]]);\n      assert.equal(multiCodex.a2.startSession.mock.calls.length, 1);\n      assert.deepEqual(multiCodex.a2.startSession.mock.calls[0]?.[0]?.resumeCursor, a2Cursor);\n      const stopOrder = multiCodex.a3.stopSession.mock.invocationCallOrder[0];\n      const startOrder = multiCodex.a2.startSession.mock.invocationCallOrder[0];\n      assert.equal(stopOrder !== undefined && startOrder !== undefined && stopOrder < startOrder, true);\n\n      multiCodex.a2.startSession.mockClear();\n      multiCodex.a3.stopSession.mockClear();\n      yield* provider.sendTurn({\n        threadId,\n        input: "same provider should not churn",\n        attachments: [],\n      });\n      assert.equal(multiCodex.a2.startSession.mock.calls.length, 0);\n      assert.equal(multiCodex.a3.stopSession.mock.calls.length, 0);\n    }),\n  );\n\n  it.effect("serializes competing A2 and A3 starts so only one writer survives", () =>\n    Effect.gen(function* () {\n      const provider = yield* ProviderService.ProviderService;\n      const threadId = asThreadId("thread-competing-codex-starts");\n\n      yield* Effect.all(\n        [\n          provider.startSession(threadId, {\n            provider: CODEX_DRIVER,\n            providerInstanceId: multiCodex.a2Id,\n            threadId,\n            runtimeMode: "full-access",\n            resumeCursor: { threadId: "native-shared-thread" },\n          }),\n          provider.startSession(threadId, {\n            provider: CODEX_DRIVER,\n            providerInstanceId: multiCodex.a3Id,\n            threadId,\n            runtimeMode: "full-access",\n            resumeCursor: { threadId: "native-shared-thread" },\n          }),\n        ],\n        { concurrency: "unbounded" },\n      );\n\n      const a2Live = yield* multiCodex.a2.hasSession(threadId);\n      const a3Live = yield* multiCodex.a3.hasSession(threadId);\n      assert.equal(Number(a2Live) + Number(a3Live), 1);\n      const sessions = (yield* provider.listSessions()).filter(\n        (session) => session.threadId === threadId,\n      );\n      assert.equal(sessions.length, 1);\n    }),\n  );\n\n  it.effect("recovers the previous A3 binding after an A2 startup failure", () =>\n    Effect.gen(function* () {\n      const provider = yield* ProviderService.ProviderService;\n      const threadId = asThreadId("thread-failed-a2-switch");\n      const a3Cursor = { threadId: "native-a3-recoverable" };\n\n      yield* provider.startSession(threadId, {\n        provider: CODEX_DRIVER,\n        providerInstanceId: multiCodex.a3Id,\n        threadId,\n        cwd: "/tmp/project-a3-recoverable",\n        runtimeMode: "full-access",\n        resumeCursor: a3Cursor,\n      });\n      multiCodex.a3.startSession.mockClear();\n      multiCodex.a2.startSession.mockImplementationOnce(() =>\n        Effect.fail(\n          new ProviderAdapterRequestError({\n            provider: String(CODEX_DRIVER),\n            method: "startSession",\n            detail: "simulated A2 startup failure",\n          }),\n        ),\n      );\n\n      const switchExit = yield* Effect.exit(\n        provider.startSession(threadId, {\n          provider: CODEX_DRIVER,\n          providerInstanceId: multiCodex.a2Id,\n          threadId,\n          cwd: "/tmp/project-a2-failing",\n          runtimeMode: "full-access",\n          resumeCursor: { threadId: "native-a2-failing" },\n        }),\n      );\n      assert.equal(Exit.isFailure(switchExit), true);\n      assert.equal(yield* multiCodex.a3.hasSession(threadId), false);\n\n      yield* provider.sendTurn({\n        threadId,\n        input: "recover previous A3",\n        attachments: [],\n      });\n      assert.equal(multiCodex.a3.startSession.mock.calls.length, 1);\n      assert.deepEqual(multiCodex.a3.startSession.mock.calls[0]?.[0]?.resumeCursor, a3Cursor);\n    }),\n  );\n\n  it.effect("quiesces stale writers before committing an importer binding repair", () =>\n    Effect.gen(function* () {\n      const provider = yield* ProviderService.ProviderService;\n      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;\n      const threadId = asThreadId("thread-atomic-import-repair");\n      const canonicalCursor = { threadId: "native-a2-imported-original" };\n\n      yield* provider.startSession(threadId, {\n        provider: CODEX_DRIVER,\n        providerInstanceId: multiCodex.a3Id,\n        threadId,\n        runtimeMode: "full-access",\n        resumeCursor: { threadId: "native-a3-stale" },\n      });\n\n      let repairObserved = false;\n      yield* provider.reconcileSessionBinding(\n        {\n          threadId,\n          provider: CODEX_DRIVER,\n          providerInstanceId: multiCodex.a2Id,\n          status: "stopped",\n          runtimeMode: "full-access",\n          resumeCursor: canonicalCursor,\n          runtimePayload: { cwd: "/tmp/project-imported" },\n        },\n        Effect.gen(function* () {\n          repairObserved = true;\n          assert.equal(yield* multiCodex.a3.hasSession(threadId), false);\n          const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));\n          assert.equal(binding?.providerInstanceId, multiCodex.a2Id);\n          assert.deepEqual(binding?.resumeCursor, canonicalCursor);\n        }),\n      );\n\n      assert.equal(repairObserved, true);\n      assert.deepEqual(multiCodex.a3.stopSession.mock.calls.at(-1), [threadId]);\n    }),\n  );\n});\n\n'''
+text = text.replace(routing_layer_marker, multi_tests + routing_layer_marker, 1)
+p.write_text(text, encoding="utf-8")
+
+thread_import_test = "apps/server/src/threadImport/ThreadImportService.test.ts"
+replace_once(
+    thread_import_test,
+    '''import type { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";\nimport type {\n''',
+    '''import type { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";\nimport type { ProviderService } from "../provider/Services/ProviderService.ts";\nimport type {\n''',
+)
+p = Path(thread_import_test)
+text = p.read_text(encoding="utf-8")
+return_marker = '''  return {\n    service: makeThreadImportService({\n      projection,\n      engine,\n      providerInstances,\n      providerSessions,\n    }),\n'''
+if text.count(return_marker) != 1:
+    raise SystemExit("ThreadImportService.test: harness construction marker drifted")
+replacement = '''  const reconcileSessionBinding: ProviderService["Service"]["reconcileSessionBinding"] = (\n    binding,\n    afterBindingCommit,\n  ) => providerSessions.upsert(binding).pipe(Effect.andThen(afterBindingCommit));\n  const providerService = { reconcileSessionBinding } as ProviderService["Service"];\n\n  return {\n    service: makeThreadImportService({\n      projection,\n      engine,\n      providerInstances,\n      providerSessions,\n      providerService,\n    }),\n'''
+text = text.replace(return_marker, replacement, 1)
+p.write_text(text, encoding="utf-8")
+
+print("provider handoff v2 transactional patch applied")
