@@ -45,7 +45,11 @@ import {
   replaceTextRange,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  readFileAsDataUrl,
+  resolveImportedThreadProviderRouting,
+} from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
@@ -745,6 +749,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Store subscriptions (prompt / images / terminal contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
+  const explicitlySelectedProviderInstanceRef = useRef<{
+    readonly threadId: ThreadId;
+    readonly instanceId: ProviderInstanceId;
+  } | null>(null);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
@@ -825,9 +833,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [providerStatuses, settings],
   );
-  const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
+  const importedThreadProviderRouting = resolveImportedThreadProviderRouting({
+    threadId: activeThreadId,
+    persistedThreadInstanceId: activeThreadModelSelection?.instanceId,
+    draftActiveProvider: composerDraft.activeProvider,
+    sessionProviderInstanceId: activeThread?.session?.providerInstanceId,
+    explicitlySelectedProviderInstanceId:
+      activeThreadId !== null &&
+      explicitlySelectedProviderInstanceRef.current?.threadId === activeThreadId
+        ? explicitlySelectedProviderInstanceRef.current.instanceId
+        : null,
+  });
+  const selectedProviderByThreadId = importedThreadProviderRouting.draftActiveProvider;
   const threadProvider =
-    activeThread?.session?.providerInstanceId ??
+    importedThreadProviderRouting.sessionProviderInstanceId ??
     activeThreadModelSelection?.instanceId ??
     activeProjectDefaultModelSelection?.instanceId ??
     null;
@@ -845,7 +864,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const lockedContinuationGroupKey = useMemo((): string | null => {
     if (!lockedProvider || !activeThread) return null;
     const lockedInstanceId =
-      activeThread.session?.providerInstanceId ?? activeThreadModelSelection?.instanceId;
+      importedThreadProviderRouting.sessionProviderInstanceId ??
+      activeThreadModelSelection?.instanceId;
     if (!lockedInstanceId) return null;
     return (
       providerInstanceEntries.find((entry) => entry.instanceId === lockedInstanceId)
@@ -854,6 +874,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [
     activeThread,
     activeThreadModelSelection?.instanceId,
+    importedThreadProviderRouting.sessionProviderInstanceId,
     lockedProvider,
     providerInstanceEntries,
   ]);
@@ -870,8 +891,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   //
   const selectedInstanceId = useMemo<ProviderInstanceId>(() => {
     const candidates: Array<string | null | undefined> = [
-      composerDraft.activeProvider,
-      activeThread?.session?.providerInstanceId,
+      importedThreadProviderRouting.draftActiveProvider,
+      importedThreadProviderRouting.sessionProviderInstanceId,
       activeThreadModelSelection?.instanceId,
       activeProjectDefaultModelSelection?.instanceId,
     ];
@@ -908,9 +929,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   }, [
     activeProjectDefaultModelSelection?.instanceId,
-    activeThread?.session?.providerInstanceId,
     activeThreadModelSelection?.instanceId,
-    composerDraft.activeProvider,
+    importedThreadProviderRouting.draftActiveProvider,
+    importedThreadProviderRouting.sessionProviderInstanceId,
     lockedContinuationGroupKey,
     lockedProvider,
     providerInstanceEntries,
@@ -992,6 +1013,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
     [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
+  );
+  const handleProviderModelSelect = useCallback(
+    (instanceId: ProviderInstanceId, model: string) => {
+      explicitlySelectedProviderInstanceRef.current =
+        activeThreadId === null ? null : { threadId: activeThreadId, instanceId };
+      onProviderModelSelect(instanceId, model);
+    },
+    [activeThreadId, onProviderModelSelect],
   );
   const selectedModelForPicker = selectedModel;
   // Instance-keyed option list so the picker can show each configured
@@ -2523,6 +2552,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [hasBlockingComposerTopDrawer]);
 
   useEffect(() => {
+    explicitlySelectedProviderInstanceRef.current = null;
     setIsTasksDrawerOpen(false);
   }, [activeThreadId]);
 
@@ -3508,7 +3538,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         setIsComposerModelPickerOpen(open);
                       }}
                       getModelDisabledReason={getModelDisabledReason}
-                      onInstanceModelChange={onProviderModelSelect}
+                      onInstanceModelChange={handleProviderModelSelect}
                     />
                   )}
 
