@@ -44,54 +44,7 @@ jobs:
         run: python3 scripts/patch-provider-thread-handoff-v1.py
 
       - name: Use Effect v4 per-thread semaphore
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("apps/server/src/provider/Layers/ProviderService.ts")
-          text = p.read_text(encoding="utf-8")
-          import_needle = 'import * as Ref from "effect/Ref";\n'
-          if text.count(import_needle) != 1:
-              raise SystemExit("Ref import boundary drifted")
-          text = text.replace(import_needle, import_needle + 'import * as Semaphore from "effect/Semaphore";\n', 1)
-          old = '''  const threadHandoffLocks = new Map<string, Effect.Semaphore>();
-  const getThreadHandoffLock = Effect.fn("getThreadHandoffLock")(function* (threadId: ThreadId) {
-    const key = String(threadId);
-    const existing = threadHandoffLocks.get(key);
-    if (existing) return existing;
-
-    const created = yield* Effect.makeSemaphore(1);
-    // `makeSemaphore` may yield; if another fiber won the race, share its lock.
-    const raced = threadHandoffLocks.get(key);
-    if (raced) return raced;
-    threadHandoffLocks.set(key, created);
-    return created;
-  });
-  const withThreadHandoffLock = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
-    Effect.flatMap(getThreadHandoffLock(threadId), (lock) => lock.withPermits(1)(effect));
-'''
-          new = '''  const threadHandoffLocks = new Map<string, Semaphore.Semaphore>();
-  const getThreadHandoffLock = (threadId: ThreadId): Semaphore.Semaphore => {
-    const key = String(threadId);
-    const existing = threadHandoffLocks.get(key);
-    if (existing) return existing;
-
-    // Construction is synchronous in Effect v4, so there is no creation race.
-    const created = Semaphore.makeUnsafe(1);
-    threadHandoffLocks.set(key, created);
-    return created;
-  };
-  const withThreadHandoffLock = <A, E, R>(
-    threadId: ThreadId,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> => getThreadHandoffLock(threadId).withPermit(effect);
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one generated handoff lock block, found {text.count(old)}")
-          p.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
+        run: python3 scripts/repair-provider-handoff-semaphore-v1.py
 
       - name: Format
         run: vp fmt
@@ -100,7 +53,8 @@ jobs:
         run: |
           git diff --name-only 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- \
             ':!.github/workflows/validate-provider-thread-handoff-v1.yml' \
-            ':!scripts/patch-provider-thread-handoff-v1.py' | sort > /tmp/actual.txt
+            ':!scripts/patch-provider-thread-handoff-v1.py' \
+            ':!scripts/repair-provider-handoff-semaphore-v1.py' | sort > /tmp/actual.txt
           cat > /tmp/expected.txt <<'EOF'
           apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
           apps/server/src/provider/Layers/ProviderService.ts
