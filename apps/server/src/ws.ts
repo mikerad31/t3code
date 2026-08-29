@@ -484,6 +484,7 @@ const makeWsRpcLayer = (
         engine: orchestrationEngine,
         providerInstances,
         providerSessions,
+        providerService,
       });
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;

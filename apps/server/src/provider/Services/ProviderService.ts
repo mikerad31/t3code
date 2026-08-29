@@ -33,6 +33,7 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+import type { ProviderRuntimeBinding } from "./ProviderSessionDirectory.ts";
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -80,6 +81,17 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Quiesce every live provider writer for a thread, replace its canonical
+   * persisted binding, then run a repair effect while the same per-thread
+   * lifecycle lock is still held. This is intentionally internal orchestration
+   * plumbing for importer/provider repair paths, not a transport RPC.
+   */
+  readonly reconcileSessionBinding: <A, E, R>(
+    binding: ProviderRuntimeBinding,
+    afterBindingCommit: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, ProviderServiceError | E, R>;
 
   /**
    * List active provider sessions.
