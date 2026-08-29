@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -18,6 +19,7 @@ import {
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveLockedProvider,
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
@@ -28,6 +30,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftPromotionNavigationTarget,
+  resolveImportedThreadProviderRouting,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
@@ -272,6 +275,29 @@ const readySession = {
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
 
+describe("deriveLockedProvider", () => {
+  it("resolves a pure imported custom instance to its registered driver kind", () => {
+    const importedInstanceId = ProviderInstanceId.make("codex_a1");
+    const codexDriver = ProviderDriverKind.make("codex");
+
+    expect(
+      deriveLockedProvider({
+        thread: makeThread({
+          modelSelection: {
+            instanceId: importedInstanceId,
+            model: "gpt-5.6-codex",
+          },
+          latestTurn: completedTurn,
+          session: null,
+        }),
+        providers: [{ instanceId: importedInstanceId, driver: codexDriver }],
+        selectedProvider: null,
+        threadProvider: importedInstanceId,
+      }),
+    ).toBe(codexDriver);
+  });
+});
+
 describe("buildLoadingThreadFromShell", () => {
   it("preserves shell metadata and supplies empty detail collections", () => {
     const shell = {
@@ -342,6 +368,72 @@ describe("resolveThreadMetadataUpdateForNextTurn", () => {
         nextBranch: "feature/current",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveImportedThreadProviderRouting", () => {
+  const importedThreadId = ThreadId.make("imported:resume-test");
+  const sourceInstanceId = ProviderInstanceId.make("codex_a2");
+  const staleInstanceId = ProviderInstanceId.make("codex");
+
+  it("ignores stale draft and session instance drift for an imported thread", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: null,
+      }),
+    ).toEqual({
+      draftActiveProvider: null,
+      sessionProviderInstanceId: null,
+    });
+  });
+
+  it("does not unlock stale provider drift after a model-only selection on the source instance", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: sourceInstanceId,
+      }),
+    ).toEqual({
+      draftActiveProvider: null,
+      sessionProviderInstanceId: null,
+    });
+  });
+
+  it("honors an explicitly selected different provider instance during the current thread visit", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: sourceInstanceId,
+        explicitlySelectedProviderInstanceId: staleInstanceId,
+      }),
+    ).toEqual({
+      draftActiveProvider: staleInstanceId,
+      sessionProviderInstanceId: sourceInstanceId,
+    });
+  });
+
+  it("leaves ordinary server-thread routing unchanged", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: null,
+      }),
+    ).toEqual({
+      draftActiveProvider: staleInstanceId,
+      sessionProviderInstanceId: staleInstanceId,
+    });
   });
 });
 

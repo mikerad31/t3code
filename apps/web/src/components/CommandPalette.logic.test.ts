@@ -9,8 +9,39 @@ import {
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  selectNewThreadImportCandidateIds,
+  summarizeAutoThreadImportResults,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("automatic project conversation import", () => {
+  it("selects only candidates that are not already imported", () => {
+    expect(
+      selectNewThreadImportCandidateIds([
+        { candidateId: "new-1", alreadyImported: false },
+        { candidateId: "existing", alreadyImported: true },
+        { candidateId: "new-2", alreadyImported: false },
+      ]),
+    ).toEqual(["new-1", "new-2"]);
+  });
+
+  it("summarizes successful, degraded, duplicate, and failed imports", () => {
+    expect(
+      summarizeAutoThreadImportResults([
+        { status: "imported" },
+        { status: "transcript-only" },
+        { status: "already-imported" },
+        { status: "failed" },
+        { status: "imported" },
+      ]),
+    ).toEqual({
+      importedCount: 2,
+      transcriptOnlyCount: 1,
+      alreadyImportedCount: 1,
+      failedCount: 1,
+    });
+  });
+});
 
 describe("browseInputEndPaddingClass", () => {
   it("reserves the widest space for the create action", () => {

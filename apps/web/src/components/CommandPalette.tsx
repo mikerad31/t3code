@@ -124,6 +124,8 @@ import {
   type CommandPaletteView,
   filterCommandPaletteGroups,
   filterPinnedBrowseEntries,
+  selectNewThreadImportCandidateIds,
+  summarizeAutoThreadImportResults,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
@@ -146,7 +148,11 @@ import {
   ThreadCommandSubtitle,
 } from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
-import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
+import {
+  primaryServerKeybindingsAtom,
+  primaryServerProvidersAtom,
+  serverEnvironment,
+} from "../state/server";
 import {
   deriveProviderInstanceEntries,
   resolveDefaultProviderModelSelection,
@@ -570,6 +576,12 @@ function OpenCommandPaletteDialog(props: {
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
   const createProject = useAtomCommand(projectEnvironment.create, {
+    reportFailure: false,
+  });
+  const scanThreadImports = useAtomQueryRunner(serverEnvironment.threadImportScan, {
+    reportFailure: false,
+  });
+  const commitThreadImports = useAtomCommand(serverEnvironment.threadImportCommit, {
     reportFailure: false,
   });
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
@@ -1671,6 +1683,93 @@ function OpenCommandPaletteDialog(props: {
     threadSearchItems: allThreadItems,
   });
 
+  const autoImportCodexHistory = useCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly projectId: ProjectId;
+      readonly projectTitle: string;
+    }) => {
+      const scanResult = await scanThreadImports({
+        environmentId: input.environmentId,
+        input: { projectId: input.projectId },
+      });
+      if (scanResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(scanResult)) {
+          const error = squashAtomCommandFailure(scanResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Project added; Codex import skipped",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "Existing Codex conversations could not be scanned.",
+            }),
+          );
+        }
+        return;
+      }
+
+      const candidateIds = selectNewThreadImportCandidateIds(scanResult.value.candidates);
+      if (candidateIds.length === 0) return;
+
+      const commitResult = await commitThreadImports({
+        environmentId: input.environmentId,
+        input: {
+          projectId: input.projectId,
+          candidateIds,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+      });
+      if (commitResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(commitResult)) {
+          const error = squashAtomCommandFailure(commitResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Project added; Codex import incomplete",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "Existing Codex conversations could not be imported.",
+            }),
+          );
+        }
+        return;
+      }
+
+      const summary = summarizeAutoThreadImportResults(commitResult.value.results);
+      const importedCount = summary.importedCount + summary.transcriptOnlyCount;
+      const needsAttention = summary.transcriptOnlyCount + summary.failedCount;
+      if (importedCount === 0 && needsAttention === 0) return;
+
+      const conversationLabel = `${importedCount} Codex conversation${importedCount === 1 ? "" : "s"}`;
+      if (needsAttention === 0) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: `Imported ${conversationLabel}`,
+            description: `Existing Codex history is ready in ${input.projectTitle}.`,
+          }),
+        );
+        return;
+      }
+
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title:
+            importedCount > 0
+              ? `Imported ${conversationLabel} with warnings`
+              : "Project added; Codex import incomplete",
+          description: `${needsAttention} conversation${needsAttention === 1 ? "" : "s"} need attention. Use Import conversations to review or retry them.`,
+        }),
+      );
+    },
+    [commitThreadImports, scanThreadImports],
+  );
+
   const handleAddProjectForEnvironment = useCallback(
     async (input: {
       readonly environmentId: EnvironmentId;
@@ -1756,6 +1855,7 @@ function OpenCommandPaletteDialog(props: {
       }
 
       const projectId = newProjectId();
+      const projectTitle = inferProjectTitleFromPath(cwd);
       const targetEnvironmentProviders =
         environments.find((environment) => environment.environmentId === input.environmentId)
           ?.serverConfig?.providers ??
@@ -1764,7 +1864,7 @@ function OpenCommandPaletteDialog(props: {
         environmentId: input.environmentId,
         input: {
           projectId,
-          title: inferProjectTitleFromPath(cwd),
+          title: projectTitle,
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
           defaultModelSelection: resolveDefaultProviderModelSelection(
@@ -1787,6 +1887,26 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      if (
+        targetEnvironmentProviders.some(
+          (provider) => provider.driver === "codex" && provider.enabled,
+        )
+      ) {
+        void autoImportCodexHistory({
+          environmentId: input.environmentId,
+          projectId,
+          projectTitle,
+        }).catch((error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Project added; Codex import incomplete",
+              description: errorMessage(error),
+            }),
+          );
+        });
+      }
+
       const navigationResult = await settlePromise(() =>
         handleNewThread(scopeProjectRef(input.environmentId, projectId)),
       );
@@ -1806,6 +1926,7 @@ function OpenCommandPaletteDialog(props: {
     [
       handleNewThread,
       createProject,
+      autoImportCodexHistory,
       environments,
       navigate,
       primaryEnvironmentId,
