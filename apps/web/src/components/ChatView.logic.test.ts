@@ -30,6 +30,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftPromotionNavigationTarget,
+  resolveImportedThreadProviderRouting,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
@@ -367,6 +368,72 @@ describe("resolveThreadMetadataUpdateForNextTurn", () => {
         nextBranch: "feature/current",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveImportedThreadProviderRouting", () => {
+  const importedThreadId = ThreadId.make("imported:resume-test");
+  const sourceInstanceId = ProviderInstanceId.make("codex_a2");
+  const staleInstanceId = ProviderInstanceId.make("codex");
+
+  it("ignores stale draft and session instance drift for an imported thread", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: null,
+      }),
+    ).toEqual({
+      draftActiveProvider: null,
+      sessionProviderInstanceId: null,
+    });
+  });
+
+  it("does not unlock stale provider drift after a model-only selection on the source instance", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: sourceInstanceId,
+      }),
+    ).toEqual({
+      draftActiveProvider: null,
+      sessionProviderInstanceId: null,
+    });
+  });
+
+  it("honors an explicitly selected different provider instance during the current thread visit", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId: importedThreadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: sourceInstanceId,
+        explicitlySelectedProviderInstanceId: staleInstanceId,
+      }),
+    ).toEqual({
+      draftActiveProvider: staleInstanceId,
+      sessionProviderInstanceId: sourceInstanceId,
+    });
+  });
+
+  it("leaves ordinary server-thread routing unchanged", () => {
+    expect(
+      resolveImportedThreadProviderRouting({
+        threadId,
+        persistedThreadInstanceId: sourceInstanceId,
+        draftActiveProvider: staleInstanceId,
+        sessionProviderInstanceId: staleInstanceId,
+        explicitlySelectedProviderInstanceId: null,
+      }),
+    ).toEqual({
+      draftActiveProvider: staleInstanceId,
+      sessionProviderInstanceId: staleInstanceId,
+    });
   });
 });
 
