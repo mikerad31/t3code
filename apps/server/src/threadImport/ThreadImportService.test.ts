@@ -429,6 +429,60 @@ describe("ThreadImportService", () => {
     }),
   );
 
+  it.effect("preserves archived source metadata through scan and provider read", () =>
+    Effect.gen(function* () {
+      const externalThreadId = "codex-thread-archived";
+      const archivedCandidate = sourceCandidate({
+        externalThreadId,
+        title: "Archived persisted Codex conversation",
+        archived: true,
+      });
+      const readInputs: Array<Parameters<ProviderThreadImportShape["read"]>[0]> = [];
+      const harness = makeHarness({
+        candidates: [archivedCandidate],
+        read: (input) => {
+          readInputs.push(input);
+          return Effect.succeed(
+            sourceTranscript({
+              externalThreadId,
+              title: archivedCandidate.title,
+              archived: true,
+              resumeCursor: { threadId: externalThreadId },
+            }),
+          );
+        },
+      });
+
+      const scan = yield* harness.service.scan({ projectId });
+      expect(scan.candidates[0]).toMatchObject({
+        externalThreadId,
+        archived: true,
+        canResume: true,
+        alreadyImported: false,
+      });
+
+      const result = yield* harness.service.commit({
+        projectId,
+        candidateIds: [scan.candidates[0]!.candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+
+      expect(result.results[0]?.status).toBe("imported");
+      expect(readInputs).toEqual([
+        {
+          projectRoot: project.workspaceRoot,
+          externalThreadId,
+          archived: true,
+        },
+      ]);
+      expect(harness.bindings[0]).toMatchObject({
+        providerInstanceId: instanceId,
+        resumeCursor: { threadId: externalThreadId },
+      });
+    }),
+  );
+
   it.effect("surfaces a total Codex scan failure instead of reporting empty history", () =>
     Effect.gen(function* () {
       const harness = makeHarness({
