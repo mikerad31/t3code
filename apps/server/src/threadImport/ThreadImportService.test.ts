@@ -140,6 +140,12 @@ function makeHarness(options: {
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
         } as OrchestrationThreadShell;
+      } else if (
+        command.type === "thread.meta.update" &&
+        command.modelSelection !== undefined &&
+        importedThread !== null
+      ) {
+        importedThread = { ...importedThread, modelSelection: command.modelSelection };
       }
       return Effect.succeed({ sequence: commands.length });
     },
@@ -189,6 +195,10 @@ function makeHarness(options: {
     }),
     commands,
     bindings,
+    setImportedModelSelection: (modelSelection: OrchestrationThreadShell["modelSelection"]) => {
+      if (importedThread === null) throw new Error("expected an imported thread");
+      importedThread = { ...importedThread, modelSelection };
+    },
   };
 }
 
@@ -334,6 +344,81 @@ describe("ThreadImportService", () => {
       expect(repairCommit.results[0]?.warnings.join(" ")).toContain("was restored");
       expect(harness.commands).toHaveLength(1);
       expect(harness.bindings).toHaveLength(1);
+
+      const repairedScan = yield* harness.service.scan({ projectId });
+      expect(repairedScan.candidates[0]).toMatchObject({
+        candidateId,
+        alreadyImported: true,
+        canResume: true,
+      });
+    }),
+  );
+
+  it.effect("repairs provider-instance drift before restoring native resume state", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        candidates: [sourceCandidate()],
+        read: () => Effect.succeed(sourceTranscript()),
+      });
+      const initialScan = yield* harness.service.scan({ projectId });
+      const candidateId = initialScan.candidates[0]!.candidateId;
+      yield* harness.service.commit({
+        projectId,
+        candidateIds: [candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+
+      const driftedInstanceId = ProviderInstanceId.make("codex");
+      harness.setImportedModelSelection({
+        instanceId: driftedInstanceId,
+        model: "gpt-5.6-luna",
+      });
+      harness.bindings[0] = {
+        ...harness.bindings[0]!,
+        providerInstanceId: driftedInstanceId,
+        resumeCursor: { threadId: "newly-started-thread" },
+      };
+
+      const repairScan = yield* harness.service.scan({ projectId });
+      expect(repairScan.candidates[0]).toMatchObject({
+        candidateId,
+        alreadyImported: false,
+        canResume: false,
+      });
+
+      const repairCommit = yield* harness.service.commit({
+        projectId,
+        candidateIds: [candidateId],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      expect(repairCommit.results[0]?.status).toBe("already-imported");
+      expect(harness.commands.map((command) => command.type)).toEqual([
+        "thread.import",
+        "thread.meta.update",
+      ]);
+      const metadataRepair = harness.commands[1]!;
+      expect(metadataRepair.type).toBe("thread.meta.update");
+      if (metadataRepair.type !== "thread.meta.update") {
+        throw new Error("expected thread.meta.update repair command");
+      }
+      expect(metadataRepair.modelSelection).toMatchObject({
+        instanceId,
+        model: "gpt-5.6-codex",
+      });
+
+      const repairedBinding = harness.bindings.at(-1);
+      expect(repairedBinding).toMatchObject({
+        providerInstanceId: instanceId,
+        resumeCursor: sourceTranscript().resumeCursor,
+        runtimePayload: {
+          modelSelection: {
+            instanceId,
+            model: "gpt-5.6-codex",
+          },
+        },
+      });
 
       const repairedScan = yield* harness.service.scan({ projectId });
       expect(repairedScan.candidates[0]).toMatchObject({

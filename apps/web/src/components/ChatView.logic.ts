@@ -148,6 +148,48 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   };
 }
 
+/**
+ * Imported provider conversations carry an exact provider-instance binding.
+ * Their deterministic T3 thread ids can resurrect stale browser-local composer
+ * state from an earlier import. Until the user explicitly changes provider in
+ * the current thread visit, the persisted server-thread instance is canonical.
+ */
+export function resolveImportedThreadProviderRouting(input: {
+  threadId: ThreadId | null;
+  persistedThreadInstanceId: ProviderInstanceId | null | undefined;
+  draftActiveProvider: ProviderInstanceId | null | undefined;
+  sessionProviderInstanceId: ProviderInstanceId | null | undefined;
+  explicitlySelectedForThread: boolean;
+}): {
+  draftActiveProvider: ProviderInstanceId | null;
+  sessionProviderInstanceId: ProviderInstanceId | null;
+} {
+  const draftActiveProvider = input.draftActiveProvider ?? null;
+  const sessionProviderInstanceId = input.sessionProviderInstanceId ?? null;
+  const persistedThreadInstanceId = input.persistedThreadInstanceId ?? null;
+  const isImportedThread =
+    input.threadId !== null && String(input.threadId).startsWith("imported:");
+
+  if (
+    !isImportedThread ||
+    persistedThreadInstanceId === null ||
+    input.explicitlySelectedForThread
+  ) {
+    return { draftActiveProvider, sessionProviderInstanceId };
+  }
+
+  return {
+    draftActiveProvider:
+      draftActiveProvider !== null && draftActiveProvider !== persistedThreadInstanceId
+        ? null
+        : draftActiveProvider,
+    sessionProviderInstanceId:
+      sessionProviderInstanceId !== null && sessionProviderInstanceId !== persistedThreadInstanceId
+        ? null
+        : sessionProviderInstanceId,
+  };
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
