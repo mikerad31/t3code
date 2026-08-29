@@ -10,23 +10,6 @@ function clampPercent(value: number): number {
 }
 
 /**
- * Keep the default Codex instance visually consistent with explicitly named
- * sibling accounts. A custom display name always wins; only the generic
- * built-in "Codex" label is normalized to A1 when multiple accounts exist.
- */
-export function resolveCodexAccountLabel(input: {
-  readonly displayName: string | null | undefined;
-  readonly ordinal: number;
-  readonly accountCount: number;
-}): string {
-  const configured = input.displayName?.trim();
-  if (configured && (configured !== "Codex" || input.accountCount <= 1)) {
-    return configured;
-  }
-  return input.accountCount > 1 ? `A${input.ordinal + 1}` : configured || "Codex";
-}
-
-/**
  * Parse the compact Codex provider-status detail emitted by our server-side
  * rate-limit formatter. Keeping the parser isolated means the sidebar UI can
  * be replaced with a structured contract later without touching presentation.

@@ -127,6 +127,44 @@ export function shouldShowInstanceBadge(
   return false;
 }
 
+export interface ProviderInstanceIdentity {
+  readonly label: string;
+  readonly shouldDisplay: boolean;
+}
+
+/**
+ * Resolve the compact identity that disambiguates sibling instances of the
+ * same provider driver. Single-instance setups stay visually quiet; when
+ * several Codex accounts share the generic driver label, their stable server
+ * order becomes A1 / A2 / A3 so the sidebar and account controls remain
+ * scannable without exposing routing slugs. Explicitly configured names win.
+ */
+export function resolveProviderInstanceIdentity(
+  entry: ProviderInstanceEntry,
+  entries: Iterable<ProviderInstanceEntry>,
+): ProviderInstanceIdentity {
+  const siblings = [...entries].filter((candidate) => candidate.driverKind === entry.driverKind);
+  if (siblings.length <= 1) {
+    return { label: entry.displayName, shouldDisplay: false };
+  }
+
+  if (String(entry.driverKind) !== "codex") {
+    return { label: entry.displayName, shouldDisplay: true };
+  }
+
+  const configured = entry.snapshot.displayName?.trim();
+  const kindLabel = driverKindLabel(entry.driverKind);
+  if (configured && configured !== kindLabel) {
+    return { label: configured, shouldDisplay: true };
+  }
+
+  const ordinal = siblings.findIndex((candidate) => candidate.instanceId === entry.instanceId);
+  return {
+    label: ordinal >= 0 ? `A${ordinal + 1}` : entry.displayName,
+    shouldDisplay: true,
+  };
+}
+
 export function normalizeProviderAccentColor(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;

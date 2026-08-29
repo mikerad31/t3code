@@ -43,6 +43,7 @@ import {
   CircleDashedIcon,
   ClockIcon,
   DownloadIcon,
+  EllipsisIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
@@ -175,6 +176,7 @@ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
   deriveProviderEntriesByEnvironment,
+  resolveProviderInstanceIdentity,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
@@ -182,7 +184,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -270,7 +272,9 @@ function SidebarThreadTooltip({
   projectFaviconPath,
   environmentLabel,
   providerEntry,
+  providerIdentityLabel,
   showInstanceBadge,
+  showProviderIdentity,
   modelInstanceId,
   modelLabel,
   branchMismatch,
@@ -283,7 +287,9 @@ function SidebarThreadTooltip({
   projectFaviconPath: string | null;
   environmentLabel: string | null;
   providerEntry: ProviderInstanceEntry | null;
+  providerIdentityLabel: string;
   showInstanceBadge: boolean;
+  showProviderIdentity: boolean;
   modelInstanceId: string;
   modelLabel: string;
   branchMismatch: {
@@ -342,9 +348,7 @@ function SidebarThreadTooltip({
             <div className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
                 driverKind={driverKind}
-                displayName={
-                  providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
-                }
+                displayName={providerIdentityLabel}
                 accentColor={providerEntry?.accentColor}
                 // Initials would swallow a size-3 glyph: accent dot, name in label.
                 showBadge={showInstanceBadge && providerEntry?.accentColor !== undefined}
@@ -353,9 +357,7 @@ function SidebarThreadTooltip({
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
               <div className="min-w-0 truncate text-foreground/75">
-                {showInstanceBadge && providerEntry
-                  ? `${modelLabel} · ${providerEntry.displayName}`
-                  : modelLabel}
+                {showProviderIdentity ? `${modelLabel} · ${providerIdentityLabel}` : modelLabel}
               </div>
             </div>
           ) : null}
@@ -949,6 +951,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -967,7 +979,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       projectFaviconPath={props.projectFaviconPath}
       environmentLabel={props.environmentLabel}
       providerEntry={providerEntry}
+      providerIdentityLabel={providerIdentityLabel}
       showInstanceBadge={showInstanceBadge}
+      showProviderIdentity={showProviderIdentity}
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
@@ -1276,6 +1290,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               />
             </span>
             {title}
+            {driverKind && showProviderIdentity ? (
+              <span
+                role="img"
+                aria-label={`Provider ${providerIdentityLabel}`}
+                className="inline-flex shrink-0 items-center"
+              >
+                <ProviderInstanceIcon
+                  driverKind={driverKind}
+                  displayName={providerIdentityLabel}
+                  accentColor={providerEntry?.accentColor}
+                  showBadge
+                  iconClassName="size-3.5 opacity-60"
+                  badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+                />
+              </span>
+            ) : null}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -1588,11 +1618,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
                       driverKind={driverKind}
-                      displayName={
-                        providerEntry?.displayName ??
-                        thread.session?.providerName ??
-                        modelInstanceId
-                      }
+                      displayName={providerIdentityLabel}
                       accentColor={providerEntry?.accentColor}
                       showBadge={showInstanceBadge}
                       // Glyph dims, badge stays saturated; offset matches the composer trigger.
@@ -1657,6 +1683,16 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
+  const providerIdentity =
+    providerEntry !== null
+      ? resolveProviderInstanceIdentity(providerEntry, props.providerEntryByInstanceId.values())
+      : null;
+  const providerIdentityLabel =
+    providerIdentity?.label ??
+    providerEntry?.displayName ??
+    thread.session?.providerName ??
+    modelInstanceId;
+  const showProviderIdentity = providerIdentity?.shouldDisplay ?? false;
   const selectedModel = providerEntry?.models.find(
     (model) => model.slug === thread.modelSelection.model,
   );
@@ -1704,6 +1740,22 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             fallbackIcon={MessageSquareIcon}
           />
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          {providerEntry?.driverKind && showProviderIdentity ? (
+            <span
+              role="img"
+              aria-label={`Provider ${providerIdentityLabel}`}
+              className="inline-flex shrink-0 items-center"
+            >
+              <ProviderInstanceIcon
+                driverKind={providerEntry.driverKind}
+                displayName={providerIdentityLabel}
+                accentColor={providerEntry.accentColor}
+                showBadge
+                iconClassName="size-3.5 opacity-60"
+                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+              />
+            </span>
+          ) : null}
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
             {threadTimeLabel(thread)}
           </span>
@@ -1715,7 +1767,9 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           projectFaviconPath={props.projectFaviconPath}
           environmentLabel={props.environmentLabel}
           providerEntry={providerEntry}
+          providerIdentityLabel={providerIdentityLabel}
           showInstanceBadge={showInstanceBadge}
+          showProviderIdentity={showProviderIdentity}
           modelInstanceId={modelInstanceId}
           modelLabel={modelLabel}
           branchMismatch={branchMismatch}
@@ -1732,12 +1786,13 @@ function SidebarProjectSectionHeader(props: {
   expanded: boolean;
   threadCount: number;
   onToggle: () => void;
-  onCreateThread: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onImportConversations: (event: ReactMouseEvent<HTMLButtonElement>) => void;
-  onOpenSettings: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onCreateThread: (event: ReactMouseEvent<HTMLElement>) => void;
+  onImportConversations: (event: ReactMouseEvent<HTMLElement>) => void;
+  onOpenSettings: (event: ReactMouseEvent<HTMLElement>) => void;
 }) {
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const actionClassName =
-    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring";
+    "inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground/55 outline-none transition-colors hover:bg-sidebar-control-surface hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring max-sm:size-8";
 
   return (
     <div className="group/project-section relative" data-thread-selection-safe>
@@ -1746,7 +1801,7 @@ function SidebarProjectSectionHeader(props: {
         aria-expanded={props.expanded}
         aria-label={`${props.expanded ? "Collapse" : "Expand"} ${props.project.displayName}`}
         onClick={props.onToggle}
-        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[5.25rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 pr-[3.5rem] text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring max-sm:pr-[4.5rem]"
       >
         <ChevronDownIcon
           aria-hidden
@@ -1773,7 +1828,12 @@ function SidebarProjectSectionHeader(props: {
           {props.threadCount}
         </span>
       </button>
-      <div className="pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:pointer-events-auto max-sm:opacity-100">
+      <div
+        className={cn(
+          "pointer-events-none absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/project-section:pointer-events-auto group-hover/project-section:opacity-100 group-focus-within/project-section:pointer-events-auto group-focus-within/project-section:opacity-100 max-sm:right-0 max-sm:top-0 max-sm:pointer-events-auto max-sm:opacity-100",
+          moreMenuOpen && "pointer-events-auto opacity-100",
+        )}
+      >
         <Tooltip>
           <TooltipTrigger
             render={
@@ -1789,36 +1849,33 @@ function SidebarProjectSectionHeader(props: {
           </TooltipTrigger>
           <TooltipPopup side="top">New thread</TooltipPopup>
         </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
+        <Menu open={moreMenuOpen} onOpenChange={setMoreMenuOpen}>
+          <MenuTrigger
             render={
               <button
                 type="button"
                 className={actionClassName}
-                aria-label={`Import conversations into ${props.project.displayName}`}
-                onClick={props.onImportConversations}
+                aria-label={`More actions for ${props.project.displayName}`}
               />
             }
           >
-            <DownloadIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Import conversations</TooltipPopup>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                className={actionClassName}
-                aria-label={`Project settings for ${props.project.displayName}`}
-                onClick={props.onOpenSettings}
-              />
-            }
-          >
-            <SettingsIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Project settings</TooltipPopup>
-        </Tooltip>
+            <EllipsisIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" side="bottom" sideOffset={4} className="min-w-44">
+            <MenuItem
+              render={<button type="button" />}
+              closeOnClick
+              onClick={props.onImportConversations}
+            >
+              <DownloadIcon />
+              <span>Import conversations</span>
+            </MenuItem>
+            <MenuItem render={<button type="button" />} closeOnClick onClick={props.onOpenSettings}>
+              <SettingsIcon />
+              <span>Project settings</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
       </div>
     </div>
   );
@@ -2145,7 +2202,7 @@ export default function Sidebar() {
   }, [clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -2161,7 +2218,7 @@ export default function Sidebar() {
   );
 
   const handleImportConversations = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -2170,7 +2227,7 @@ export default function Sidebar() {
     [],
   );
   const handleCreateProjectThread = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       if (isMobile) setOpenMobile(false);
@@ -3820,54 +3877,63 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                         <span className="min-w-0 truncate text-sm">All projects</span>
                       </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                          >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Import conversations into ${project.displayName}`}
-                              title={`Import conversations into ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                handleImportConversations(event, project);
-                              }}
-                            >
-                              <DownloadIcon className="size-3.5" />
-                            </Button>
-                            <Button
-                              size="icon-xs"
-                              variant="ghost-muted"
-                              aria-label={`Project settings for ${project.displayName}`}
-                              title={`Project settings for ${project.displayName}`}
-                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectSettings(event, project);
-                              }}
-                            >
-                              <SettingsIcon className="size-3.5" />
-                            </Button>
-                          </MenuRadioItem>
-                        );
-                      })}
+                      {projectGroups.map((project) => (
+                        <MenuRadioItem
+                          key={project.projectKey}
+                          value={project.projectKey}
+                          closeOnClick
+                          className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        >
+                          <ProjectFavicon
+                            environmentId={project.environmentId}
+                            cwd={project.workspaceRoot}
+                            faviconPath={project.faviconPath}
+                            className="size-4 shrink-0"
+                          />
+                          <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                        </MenuRadioItem>
+                      ))}
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+                {scopedProjectGroup !== null ? (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          type="button"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          aria-label={`Project actions for ${scopedProjectGroup.displayName}`}
+                        />
+                      }
+                    >
+                      <EllipsisIcon />
+                      <span
+                        className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                        aria-hidden="true"
+                      />
+                    </MenuTrigger>
+                    <MenuPopup align="end" className="min-w-44">
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => handleImportConversations(event, scopedProjectGroup)}
+                      >
+                        <DownloadIcon />
+                        <span>Import conversations</span>
+                      </MenuItem>
+                      <MenuItem
+                        render={<button type="button" />}
+                        closeOnClick
+                        onClick={(event) => void handleProjectSettings(event, scopedProjectGroup)}
+                      >
+                        <SettingsIcon />
+                        <span>Project settings</span>
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
+                ) : null}
                 {scopedProjectGroup === null && projectGroups.length > 1 ? (
                   <Tooltip>
                     <TooltipTrigger

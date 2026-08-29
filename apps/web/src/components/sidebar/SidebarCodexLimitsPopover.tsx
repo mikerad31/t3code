@@ -6,17 +6,28 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Random from "effect/Random";
 import { AsyncResult } from "effect/unstable/reactivity";
+import {
+  deriveProviderInstanceEntries,
+  resolveProviderInstanceIdentity,
+} from "../../providerInstances";
 import { useEnvironments } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import {
+  AlertDialog,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import {
   parseCodexBankedResetCount,
   parseCodexLimitMessage,
-  resolveCodexAccountLabel,
   type ParsedCodexLimitWindow,
 } from "./SidebarCodexLimitsPopover.logic";
 
@@ -102,8 +113,6 @@ function CodexLimitProviderCard({
 }) {
   const { provider, windows } = entry;
   const displayName = entry.accountLabel;
-  const instanceDetail =
-    String(provider.instanceId) !== String(provider.driver) ? String(provider.instanceId) : null;
   const planLabel = provider.auth.label ?? provider.auth.type ?? null;
   const canUseReset = (entry.bankedResetCount ?? 0) > 0;
 
@@ -120,14 +129,7 @@ function CodexLimitProviderCard({
           badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
         />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
-            {instanceDetail ? (
-              <code className="truncate rounded bg-muted/60 px-1 py-0.5 text-[9px] text-muted-foreground">
-                {instanceDetail}
-              </code>
-            ) : null}
-          </div>
+          <div className="truncate text-sm font-medium text-foreground">{displayName}</div>
           <div className="truncate text-[11px] text-muted-foreground">
             {[planLabel, showEnvironment ? entry.environmentLabel : null]
               .filter(Boolean)
@@ -204,33 +206,33 @@ export function SidebarCodexLimitsPopover() {
   const [resetAttempts, setResetAttempts] = useState<Readonly<Record<string, ResetAttemptState>>>(
     {},
   );
+  const [resetConfirmationEntry, setResetConfirmationEntry] = useState<CodexLimitEntry | null>(
+    null,
+  );
 
-  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(() => {
-    const discovered = environments.flatMap((environment) =>
-      (environment.serverConfig?.providers ?? []).flatMap((provider) =>
-        String(provider.driver) === "codex"
-          ? [
-              {
-                environmentId: environment.environmentId,
-                environmentLabel: environment.label,
-                provider,
-                windows: parseCodexLimitMessage(provider.message),
-                bankedResetCount: parseCodexBankedResetCount(provider.message),
-              },
-            ]
-          : [],
-      ),
-    );
-
-    return discovered.map((entry, ordinal) => ({
-      ...entry,
-      accountLabel: resolveCodexAccountLabel({
-        displayName: entry.provider.displayName,
-        ordinal,
-        accountCount: discovered.length,
+  const entries = useMemo<ReadonlyArray<CodexLimitEntry>>(
+    () =>
+      environments.flatMap((environment) => {
+        const providerEntries = deriveProviderInstanceEntries(
+          environment.serverConfig?.providers ?? [],
+        );
+        return providerEntries.flatMap((providerEntry) => {
+          if (String(providerEntry.driverKind) !== "codex") return [];
+          const provider = providerEntry.snapshot;
+          return [
+            {
+              environmentId: environment.environmentId,
+              environmentLabel: environment.label,
+              accountLabel: resolveProviderInstanceIdentity(providerEntry, providerEntries).label,
+              provider,
+              windows: parseCodexLimitMessage(provider.message),
+              bankedResetCount: parseCodexBankedResetCount(provider.message),
+            },
+          ];
+        });
       }),
-    }));
-  }, [environments]);
+    [environments],
+  );
 
   const environmentIds = useMemo(
     () => [...new Set(entries.map((entry) => entry.environmentId))],
@@ -246,18 +248,11 @@ export function SidebarCodexLimitsPopover() {
     ).finally(() => setIsRefreshing(false));
   }, [environmentIds, isRefreshing, refreshProviders]);
 
-  const useReset = useCallback(
+  const performReset = useCallback(
     (entry: CodexLimitEntry) => {
       const targetKey = resetAttemptKey(entry);
       const previousAttempt = resetAttempts[targetKey];
       if (previousAttempt?.pending) return;
-
-      const confirmed = window.confirm(
-        `Use one banked Codex reset for ${entry.accountLabel}?\n\n` +
-          "This asks Codex to redeem one earned reset for this exact account. " +
-          "If no active limit needs resetting, Codex reports that without using a credit.",
-      );
-      if (!confirmed) return;
 
       // A failed transport/RPC attempt keeps its UUID so a retry cannot redeem
       // a second credit if the first response was merely lost after redemption.
@@ -311,68 +306,111 @@ export function SidebarCodexLimitsPopover() {
     [consumeRateLimitResetCredit, resetAttempts],
   );
 
+  const requestReset = useCallback(
+    (entry: CodexLimitEntry) => {
+      if (resetAttempts[resetAttemptKey(entry)]?.pending) return;
+      setResetConfirmationEntry(entry);
+    },
+    [resetAttempts],
+  );
+
+  const confirmReset = useCallback(() => {
+    const entry = resetConfirmationEntry;
+    if (entry === null) return;
+    setResetConfirmationEntry(null);
+    performReset(entry);
+  }, [performReset, resetConfirmationEntry]);
+
   if (entries.length === 0) return null;
 
   return (
-    <SidebarMenuItem className="shrink-0">
-      <Popover>
-        <PopoverTrigger
-          render={
-            <SidebarMenuButton
-              aria-label="Codex subscription limits"
-              title="Codex subscription limits"
-              size="icon"
-            />
-          }
-        >
-          <GaugeIcon />
-        </PopoverTrigger>
-        <PopoverPopup
-          side="top"
-          align="start"
-          sideOffset={8}
-          className="w-[min(22rem,calc(100vw-1rem))]"
-          viewportClassName="p-3!"
-        >
-          <div className="grid gap-3">
-            <div className="flex items-start justify-between gap-3 px-0.5">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-foreground">Codex limits</div>
-                <div className="text-[11px] text-muted-foreground">
-                  ChatGPT subscription windows across configured accounts
+    <>
+      <SidebarMenuItem className="shrink-0">
+        <Popover>
+          <PopoverTrigger
+            render={
+              <SidebarMenuButton
+                aria-label="Codex subscription limits"
+                title="Codex subscription limits"
+                size="icon"
+              />
+            }
+          >
+            <GaugeIcon />
+          </PopoverTrigger>
+          <PopoverPopup
+            side="top"
+            align="start"
+            sideOffset={8}
+            className="w-[min(22rem,calc(100vw-1rem))]"
+            viewportClassName="p-3!"
+          >
+            <div className="grid gap-3">
+              <div className="flex items-start justify-between gap-3 px-0.5">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">Codex limits</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    ChatGPT subscription windows across configured accounts
+                  </div>
                 </div>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost-muted"
+                  disabled={isRefreshing}
+                  onClick={refresh}
+                  aria-label="Refresh Codex subscription limits"
+                  title="Refresh limits"
+                >
+                  {isRefreshing ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCwIcon className="size-3.5" />
+                  )}
+                </Button>
               </div>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost-muted"
-                disabled={isRefreshing}
-                onClick={refresh}
-                aria-label="Refresh Codex subscription limits"
-                title="Refresh limits"
-              >
-                {isRefreshing ? (
-                  <LoaderIcon className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCwIcon className="size-3.5" />
-                )}
-              </Button>
-            </div>
 
-            <div className="grid gap-2">
-              {entries.map((entry) => (
-                <CodexLimitProviderCard
-                  key={`${entry.environmentId}:${entry.provider.instanceId}`}
-                  entry={entry}
-                  showEnvironment={showEnvironment}
-                  resetAttempt={resetAttempts[resetAttemptKey(entry)]}
-                  onUseReset={useReset}
-                />
-              ))}
+              <div className="grid gap-2">
+                {entries.map((entry) => (
+                  <CodexLimitProviderCard
+                    key={`${entry.environmentId}:${entry.provider.instanceId}`}
+                    entry={entry}
+                    showEnvironment={showEnvironment}
+                    resetAttempt={resetAttempts[resetAttemptKey(entry)]}
+                    onUseReset={requestReset}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        </PopoverPopup>
-      </Popover>
-    </SidebarMenuItem>
+          </PopoverPopup>
+        </Popover>
+      </SidebarMenuItem>
+      <AlertDialog
+        open={resetConfirmationEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setResetConfirmationEntry(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Use a banked reset?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {resetConfirmationEntry
+                ? `Codex will attempt to redeem one earned reset for ${resetConfirmationEntry.accountLabel}. If no active limit needs resetting, Codex reports that without using a credit.`
+                : "Codex will attempt to redeem one earned reset for this account."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button type="button" variant="outline" onClick={() => setResetConfirmationEntry(null)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmReset}>
+              <RotateCcwIcon className="size-3.5" />
+              Use reset
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }
