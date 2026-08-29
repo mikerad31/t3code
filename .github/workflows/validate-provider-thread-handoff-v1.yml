@@ -52,6 +52,9 @@ jobs:
       - name: Update reactor handoff ownership assertion
         run: python3 scripts/patch-provider-thread-handoff-v2-reactor-test.py
 
+      - name: Apply typecheck repairs
+        run: python3 scripts/patch-provider-thread-handoff-v2-typecheck.py
+
       - name: Format
         run: vp fmt
 
@@ -59,16 +62,23 @@ jobs:
         run: |
           git diff --name-only 7b3cf77b888cf35428848ab9a4647443ebf6c1ad -- \
             ':!.github/workflows/validate-provider-thread-handoff-v1.yml' \
+            ':!.github/workflows/debug-provider-thread-handoff-typecheck.yml' \
             ':!scripts/patch-provider-thread-handoff-v1.py' \
             ':!scripts/repair-provider-handoff-semaphore-v1.py' \
             ':!scripts/patch-provider-thread-handoff-v2.py' \
-            ':!scripts/patch-provider-thread-handoff-v2-reactor-test.py' | sort > /tmp/actual.txt
+            ':!scripts/patch-provider-thread-handoff-v2-reactor-test.py' \
+            ':!scripts/patch-provider-thread-handoff-v2-typecheck.py' | sort > /tmp/actual.txt
           cat > /tmp/expected.txt <<'EOF'
+          apps/server/integration/orphanedProviderSessionStartup.integration.test.ts
+          apps/server/src/orchestration/Layers/CheckpointReactor.test.ts
           apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts
           apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
+          apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts
           apps/server/src/provider/Layers/ProviderService.test.ts
           apps/server/src/provider/Layers/ProviderService.ts
+          apps/server/src/provider/Layers/ProviderSessionReaper.test.ts
           apps/server/src/provider/Services/ProviderService.ts
+          apps/server/src/serverRuntimeStartup.reconcile.test.ts
           apps/server/src/threadImport/ThreadImportService.test.ts
           apps/server/src/threadImport/ThreadImportService.ts
           apps/server/src/ws.ts
@@ -144,7 +154,7 @@ jobs:
       - name: Diff sanity
         run: |
           git diff --check
-          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src
+          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src apps/server/integration
 
       - name: Stage validated product blobs
         if: success()
