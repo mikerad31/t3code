@@ -63,12 +63,26 @@ jobs:
         run: vp check
 
       - name: Focused provider service tests
+        id: provider_service_tests
         run: |
           set +e
           (cd apps/server && vp test run src/provider/Layers/ProviderService.test.ts) > /tmp/provider-service-test.log 2>&1
           status=$?
           tail -n 300 /tmp/provider-service-test.log
-          exit $status
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload provider service test log
+        if: always() && steps.provider_service_tests.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: provider-service-test-log
+          path: /tmp/provider-service-test.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Gate provider service tests
+        run: test "${{ steps.provider_service_tests.outputs.status }}" = "0"
 
       - name: Focused reactor tests
         run: |
