@@ -43,13 +43,19 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path("apps/server/src/threadImport/ThreadImportService.test.ts")
           text = p.read_text(encoding="utf-8")
-          old = '''                    runtimePayload: {\n                      ...harness.bindings[0]!.runtimePayload,\n                      modelSelection: handedOffSelection,\n                    },\n'''
-          new = '''                    runtimePayload: {\n                      modelSelection: handedOffSelection,\n                    },\n'''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one runtimePayload test spread, found {text.count(old)}")
-          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          pattern = re.compile(
+              r"runtimePayload:\s*\{\s*\.\.\.harness\.bindings\[0\]!\.runtimePayload,\s*modelSelection:\s*handedOffSelection,\s*\}",
+              re.MULTILINE,
+          )
+          replacement = "runtimePayload: {\n                    modelSelection: handedOffSelection,\n                  }"
+          updated, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f"expected one runtimePayload test spread, found {count}")
+          p.write_text(updated, encoding="utf-8")
           PY
 
       - name: Remove disposable workflows
