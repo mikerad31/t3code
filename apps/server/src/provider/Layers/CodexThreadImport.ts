@@ -22,6 +22,10 @@ import {
 } from "../ProviderThreadImport.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import {
+  isUnsupportedCodexTurnHistoryError,
+  readCodexRolloutTranscript,
+} from "./CodexRolloutTranscript.ts";
 
 const CODEX_IMPORT_FORCE_KILL_AFTER = "2 seconds" as const;
 const MAX_IMPORT_MESSAGES = 2_000;
@@ -67,6 +71,26 @@ function candidateFromThread(
     updatedAt: isoFromEpochSeconds(thread.updatedAt, thread.createdAt),
     archived,
     warnings: [],
+  };
+}
+
+function transcriptFromMessages(
+  thread: CodexSchema.V2ThreadReadResponse["thread"],
+  archived: boolean,
+  messages: ReadonlyArray<ProviderThreadImportMessage>,
+  warnings: ReadonlyArray<string>,
+): ProviderThreadImportTranscript {
+  return {
+    externalThreadId: thread.id,
+    title: titleForThread(thread),
+    preview: thread.preview.trim().length > 0 ? thread.preview.trim().slice(0, 240) : null,
+    sourceCwd: String(thread.cwd),
+    createdAt: isoFromEpochSeconds(thread.createdAt, thread.updatedAt),
+    updatedAt: isoFromEpochSeconds(thread.updatedAt, thread.createdAt),
+    archived,
+    messages,
+    resumeCursor: { threadId: thread.id },
+    warnings,
   };
 }
 
@@ -120,18 +144,7 @@ function extractTranscript(
     warnings.push(`Older messages were omitted after the ${MAX_IMPORT_MESSAGES}-message limit.`);
   }
 
-  return {
-    externalThreadId: thread.id,
-    title: titleForThread(thread),
-    preview: thread.preview.trim().length > 0 ? thread.preview.trim().slice(0, 240) : null,
-    sourceCwd: String(thread.cwd),
-    createdAt: isoFromEpochSeconds(thread.createdAt, thread.updatedAt),
-    updatedAt: isoFromEpochSeconds(thread.updatedAt, thread.createdAt),
-    archived,
-    messages: retained,
-    resumeCursor: { threadId: thread.id },
-    warnings,
-  };
+  return transcriptFromMessages(thread, archived, retained, warnings);
 }
 
 export function makeCodexThreadImport(input: {
@@ -224,6 +237,74 @@ export function makeCodexThreadImport(input: {
       return candidates;
     });
 
+  const ensureProjectThread = (
+    thread: CodexSchema.V2ThreadReadResponse["thread"],
+    projectRoot: string,
+    externalThreadId: string,
+  ) =>
+    Effect.flatMap(HostProcessPlatform, (platform) => {
+      if (
+        normalizePath(String(thread.cwd), platform) !== normalizePath(projectRoot, platform)
+      ) {
+        return Effect.fail(
+          new ProviderThreadImportError({
+            operation: "read",
+            detail: `Codex thread '${externalThreadId}' no longer belongs to '${projectRoot}'.`,
+          }),
+        );
+      }
+      return Effect.succeed(thread);
+    });
+
+  const readPersistedRollout = (
+    client: CodexClient.CodexAppServerClient["Service"],
+    projectRoot: string,
+    externalThreadId: string,
+    archived: boolean,
+  ): Effect.Effect<ProviderThreadImportTranscript, unknown> => {
+    if (!resolvedHomePath) {
+      return Effect.fail(
+        new ProviderThreadImportError({
+          operation: "read",
+          detail: `Codex thread '${externalThreadId}' could not use the persisted rollout fallback because the canonical history home is unavailable.`,
+        }),
+      );
+    }
+    return client
+      .request("thread/read", { threadId: externalThreadId, includeTurns: false })
+      .pipe(
+        Effect.flatMap((response) =>
+          ensureProjectThread(response.thread, projectRoot, externalThreadId),
+        ),
+        Effect.flatMap((thread) => {
+          const rolloutPath = (
+            thread as CodexSchema.V2ThreadReadResponse["thread"] & {
+              readonly path?: string | null;
+            }
+          ).path;
+          if (!rolloutPath) {
+            return Effect.fail(
+              new ProviderThreadImportError({
+                operation: "read",
+                detail: `Codex thread '${externalThreadId}' has no persisted rollout path for history fallback.`,
+              }),
+            );
+          }
+          return readCodexRolloutTranscript({
+            rolloutPath,
+            historyHomePath: resolvedHomePath,
+            externalThreadId,
+            fallbackTimestamp: isoFromEpochSeconds(thread.createdAt, thread.updatedAt),
+            maxMessages: MAX_IMPORT_MESSAGES,
+          }).pipe(
+            Effect.map(({ messages, warnings }) =>
+              transcriptFromMessages(thread, archived, messages, warnings),
+            ),
+          );
+        }),
+      );
+  };
+
   return {
     scan: ({ projectRoot }) =>
       withClient(
@@ -246,24 +327,19 @@ export function makeCodexThreadImport(input: {
     read: ({ projectRoot, externalThreadId, archived }) =>
       withClient(
         (client) =>
-          client.request("thread/read", { threadId: externalThreadId, includeTurns: true }).pipe(
-            Effect.flatMap((response) =>
-              Effect.flatMap(HostProcessPlatform, (platform) => {
-                if (
-                  normalizePath(String(response.thread.cwd), platform) !==
-                  normalizePath(projectRoot, platform)
-                ) {
-                  return Effect.fail(
-                    new ProviderThreadImportError({
-                      operation: "read",
-                      detail: `Codex thread '${externalThreadId}' no longer belongs to '${projectRoot}'.`,
-                    }),
-                  );
-                }
-                return Effect.succeed(extractTranscript(response.thread, archived));
-              }),
+          client
+            .request("thread/read", { threadId: externalThreadId, includeTurns: true })
+            .pipe(
+              Effect.flatMap((response) =>
+                ensureProjectThread(response.thread, projectRoot, externalThreadId),
+              ),
+              Effect.map((thread) => extractTranscript(thread, archived)),
+              Effect.catchAll((cause) =>
+                isUnsupportedCodexTurnHistoryError(cause)
+                  ? readPersistedRollout(client, projectRoot, externalThreadId, archived)
+                  : Effect.fail(cause),
+              ),
             ),
-          ),
         "read",
       ),
   };
