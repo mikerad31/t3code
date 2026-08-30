@@ -95,27 +95,28 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
-      const now = "2026-01-01T00:00:00.000Z";
-      const session: ProviderSession = {
-        provider,
-        ...(input.providerInstanceId !== undefined
-          ? { providerInstanceId: input.providerInstanceId }
-          : {}),
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? {
-          opaque: `resume-${String(input.threadId)}`,
-        },
-        cwd: input.cwd ?? process.cwd(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(session.threadId, session);
-      return session;
-    }),
+  const startSession = vi.fn(
+    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
+      Effect.sync(() => {
+        const now = "2026-01-01T00:00:00.000Z";
+        const session: ProviderSession = {
+          provider,
+          ...(input.providerInstanceId !== undefined
+            ? { providerInstanceId: input.providerInstanceId }
+            : {}),
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: input.resumeCursor ?? {
+            opaque: `resume-${String(input.threadId)}`,
+          },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        sessions.set(session.threadId, session);
+        return session;
+      }),
   );
 
   const sendTurn = vi.fn(
@@ -604,6 +605,73 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+function makeMultiCodexProviderServiceLayer() {
+  const a2Id = ProviderInstanceId.make("codex_a2");
+  const a3Id = ProviderInstanceId.make("codex_a3");
+  const a2 = makeFakeCodexAdapter(CODEX_DRIVER);
+  const a3 = makeFakeCodexAdapter(CODEX_DRIVER);
+  const byInstance = new Map([
+    [a2Id, a2.adapter],
+    [a3Id, a3.adapter],
+  ]);
+  const unsupported = () =>
+    new ProviderUnsupportedError({
+      provider: CODEX_DRIVER,
+    });
+  const registry: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"] = {
+    getByInstance: (instanceId) => {
+      const adapter = byInstance.get(instanceId);
+      return adapter ? Effect.succeed(adapter) : Effect.fail(unsupported());
+    },
+    getInstanceInfo: (instanceId) =>
+      byInstance.has(instanceId)
+        ? Effect.succeed({
+            instanceId,
+            driverKind: CODEX_DRIVER,
+            displayName: instanceId === a2Id ? "A2" : "A3",
+            enabled: true,
+            continuationIdentity: {
+              driverKind: CODEX_DRIVER,
+              continuationKey: `codex:test-home:${instanceId}`,
+            },
+          })
+        : Effect.fail(unsupported()),
+    listInstances: () => Effect.succeed([a2Id, a3Id]),
+    listProviders: () => Effect.succeed([CODEX_DRIVER] as const),
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+      PubSub.subscribe(pubsub),
+    ),
+  };
+  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+    Layer.provide(SqlitePersistenceMemory),
+  );
+  const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+  const layer = it.layer(
+    Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    ),
+  );
+  return { a2Id, a3Id, a2, a3, layer };
+}
+
+const multiCodex = makeMultiCodexProviderServiceLayer();
+
 const routing = makeProviderServiceLayer();
 
 it.effect(
@@ -926,6 +994,187 @@ it.effect(
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+multiCodex.layer("ProviderServiceLive multi-Codex handoff", (it) => {
+  it.effect("resumes the canonical A2 cursor after stale A3 live state", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-a3-to-a2");
+      const a3Cursor = { threadId: "native-a3-thread" };
+      const a2Cursor = { threadId: "native-a2-original-thread" };
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.a3Id,
+        threadId,
+        cwd: "/tmp/project-a3",
+        runtimeMode: "full-access",
+        resumeCursor: a3Cursor,
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.a2Id,
+        status: "stopped",
+        runtimeMode: "full-access",
+        resumeCursor: a2Cursor,
+        runtimePayload: { cwd: "/tmp/project-a2" },
+      });
+
+      multiCodex.a2.startSession.mockClear();
+      multiCodex.a3.stopSession.mockClear();
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue on canonical A2",
+        attachments: [],
+      });
+
+      assert.deepEqual(multiCodex.a3.stopSession.mock.calls, [[threadId]]);
+      assert.equal(multiCodex.a2.startSession.mock.calls.length, 1);
+      assert.deepEqual(multiCodex.a2.startSession.mock.calls[0]?.[0]?.resumeCursor, a2Cursor);
+      const stopOrder = multiCodex.a3.stopSession.mock.invocationCallOrder[0];
+      const startOrder = multiCodex.a2.startSession.mock.invocationCallOrder[0];
+      assert.equal(
+        stopOrder !== undefined && startOrder !== undefined && stopOrder < startOrder,
+        true,
+      );
+
+      multiCodex.a2.startSession.mockClear();
+      multiCodex.a3.stopSession.mockClear();
+      yield* provider.sendTurn({
+        threadId,
+        input: "same provider should not churn",
+        attachments: [],
+      });
+      assert.equal(multiCodex.a2.startSession.mock.calls.length, 0);
+      assert.equal(multiCodex.a3.stopSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("serializes competing A2 and A3 starts so only one writer survives", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-competing-codex-starts");
+
+      yield* Effect.all(
+        [
+          provider.startSession(threadId, {
+            provider: CODEX_DRIVER,
+            providerInstanceId: multiCodex.a2Id,
+            threadId,
+            runtimeMode: "full-access",
+            resumeCursor: { threadId: "native-shared-thread" },
+          }),
+          provider.startSession(threadId, {
+            provider: CODEX_DRIVER,
+            providerInstanceId: multiCodex.a3Id,
+            threadId,
+            runtimeMode: "full-access",
+            resumeCursor: { threadId: "native-shared-thread" },
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const a2Live = yield* multiCodex.a2.hasSession(threadId);
+      const a3Live = yield* multiCodex.a3.hasSession(threadId);
+      assert.equal(Number(a2Live) + Number(a3Live), 1);
+      const sessions = (yield* provider.listSessions()).filter(
+        (session) => session.threadId === threadId,
+      );
+      assert.equal(sessions.length, 1);
+    }),
+  );
+
+  it.effect("recovers the previous A3 binding after an A2 startup failure", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-failed-a2-switch");
+      const a3Cursor = { threadId: "native-a3-recoverable" };
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.a3Id,
+        threadId,
+        cwd: "/tmp/project-a3-recoverable",
+        runtimeMode: "full-access",
+        resumeCursor: a3Cursor,
+      });
+      multiCodex.a3.startSession.mockClear();
+      multiCodex.a2.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: String(CODEX_DRIVER),
+            method: "startSession",
+            detail: "simulated A2 startup failure",
+          }),
+        ),
+      );
+
+      const switchExit = yield* Effect.exit(
+        provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: multiCodex.a2Id,
+          threadId,
+          cwd: "/tmp/project-a2-failing",
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "native-a2-failing" },
+        }),
+      );
+      assert.equal(Exit.isFailure(switchExit), true);
+      assert.equal(yield* multiCodex.a3.hasSession(threadId), false);
+
+      yield* provider.sendTurn({
+        threadId,
+        input: "recover previous A3",
+        attachments: [],
+      });
+      assert.equal(multiCodex.a3.startSession.mock.calls.length, 1);
+      assert.deepEqual(multiCodex.a3.startSession.mock.calls[0]?.[0]?.resumeCursor, a3Cursor);
+    }),
+  );
+
+  it.effect("quiesces stale writers before committing an importer binding repair", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-atomic-import-repair");
+      const canonicalCursor = { threadId: "native-a2-imported-original" };
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.a3Id,
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: "native-a3-stale" },
+      });
+
+      let repairObserved = false;
+      yield* provider.reconcileSessionBinding(
+        {
+          threadId,
+          provider: CODEX_DRIVER,
+          providerInstanceId: multiCodex.a2Id,
+          status: "stopped",
+          runtimeMode: "full-access",
+          resumeCursor: canonicalCursor,
+          runtimePayload: { cwd: "/tmp/project-imported" },
+        },
+        Effect.gen(function* () {
+          repairObserved = true;
+          assert.equal(yield* multiCodex.a3.hasSession(threadId), false);
+          const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+          assert.equal(binding?.providerInstanceId, multiCodex.a2Id);
+          assert.deepEqual(binding?.resumeCursor, canonicalCursor);
+        }),
+      );
+
+      assert.equal(repairObserved, true);
+      assert.deepEqual(multiCodex.a3.stopSession.mock.calls.at(-1), [threadId]);
+    }),
+  );
+});
 
 routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("routes provider operations and rollback conversation", () =>
@@ -1271,7 +1520,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("dies when an active session conflicts with its persisted binding", () =>
+  it.effect("reports live session truth when persisted binding is stale", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -1291,8 +1540,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      const exit = yield* Effect.exit(provider.listSessions());
-      assert.equal(Exit.hasDies(exit), true);
+      const sessions = yield* provider.listSessions();
+      const live = sessions.filter((session) => session.threadId === threadId);
+      assert.equal(live.length, 1);
+      assert.equal(live[0]?.provider, CODEX_DRIVER);
+      assert.equal(live[0]?.providerInstanceId, codexInstanceId);
+
       yield* directory.upsert({
         threadId,
         provider: ProviderDriverKind.make("codex"),

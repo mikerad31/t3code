@@ -109,6 +109,7 @@ function createProviderServiceHarness() {
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
+    reconcileSessionBinding: (_binding, afterBindingCommit) => afterBindingCommit,
     listSessions: () => Effect.succeed([...runtimeSessions]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
