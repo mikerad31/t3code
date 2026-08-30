@@ -30,7 +30,12 @@ jobs:
           run-install: true
 
       - name: Format product slice
-        run: vp check --fix
+        run: |
+          vp fmt \
+            apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts \
+            apps/server/src/provider/Layers/CodexRolloutTranscript.ts \
+            apps/server/src/provider/Layers/CodexThreadImport.ts \
+            --write
 
       - name: Exact product surface
         run: |
@@ -81,6 +86,16 @@ jobs:
                 ;;
             esac
           done < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD)
+          while IFS= read -r path; do
+            case "$path" in
+              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts)
+                ;;
+              *)
+                echo "Unexpected working-tree path: $path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only)
 
       - name: Commit exact validated product tree
         run: |
