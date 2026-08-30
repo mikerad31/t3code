@@ -5,6 +5,9 @@ on:
     branches:
       - fix/codex-rollout-import-fallback
 
+permissions:
+  contents: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -26,9 +29,13 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Format product slice
+        run: vp check --fix
+
       - name: Exact product surface
         run: |
           mapfile -t files < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -v '^.github/workflows/validate-codex-rollout-import-fallback.yml$' | sort)
+          mapfile -t working < <(git diff --name-only | sort)
           expected=(
             apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts
             apps/server/src/provider/Layers/CodexRolloutTranscript.ts
@@ -37,6 +44,16 @@ jobs:
           printf '%s\n' "${files[@]}"
           test "${#files[@]}" -eq "${#expected[@]}"
           diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${files[@]}")
+          for path in "${working[@]}"; do
+            case "$path" in
+              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts)
+                ;;
+              *)
+                echo "Formatter changed unexpected path: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Repo conformance
         run: vp check
@@ -53,6 +70,7 @@ jobs:
       - name: Diff sanity
         run: |
           git diff --check de480af8fa248640ea5ea61398c46163f14eacd2...HEAD
+          git diff --check
           while IFS= read -r path; do
             case "$path" in
               .github/workflows/validate-codex-rollout-import-fallback.yml|apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts)
@@ -63,3 +81,21 @@ jobs:
                 ;;
             esac
           done < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD)
+
+      - name: Commit exact validated product tree
+        run: |
+          rm .github/workflows/validate-codex-rollout-import-fallback.yml
+          git config user.name "T3 validation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          mapfile -t final < <(git diff --cached --name-only de480af8fa248640ea5ea61398c46163f14eacd2 | sort)
+          expected=(
+            apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts
+            apps/server/src/provider/Layers/CodexRolloutTranscript.ts
+            apps/server/src/provider/Layers/CodexThreadImport.ts
+          )
+          printf '%s\n' "${final[@]}"
+          test "${#final[@]}" -eq "${#expected[@]}"
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${final[@]}")
+          git commit -m "fix(import): fall back to persisted Codex rollout history"
+          git push origin HEAD:fix/codex-rollout-import-fallback
