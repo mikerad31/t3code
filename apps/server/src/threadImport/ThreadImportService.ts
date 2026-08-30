@@ -428,6 +428,7 @@ export const makeThreadImportService = (input: {
               runtimeMode: request.runtimeMode,
               interactionMode: request.interactionMode,
               messages,
+              settled: source.archived,
               createdAt: transcript.createdAt,
               updatedAt: transcript.updatedAt,
             }),

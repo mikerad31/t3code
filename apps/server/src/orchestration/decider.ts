@@ -454,22 +454,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
-      const activeEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.updatedAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.unsettled",
-        payload: {
-          threadId: command.threadId,
-          reason: "user",
-          updatedAt: command.updatedAt,
-        },
-      };
+      const lifecycleEvent: Omit<OrchestrationEvent, "sequence"> =
+        command.settled === true
+          ? {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.updatedAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.settled",
+              payload: {
+                threadId: command.threadId,
+                settledAt: command.updatedAt,
+                updatedAt: command.updatedAt,
+              },
+            }
+          : {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.updatedAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.unsettled",
+              payload: {
+                threadId: command.threadId,
+                reason: "user",
+                updatedAt: command.updatedAt,
+              },
+            };
 
-      return [createdEvent, ...messageEvents, timestampEvent, activeEvent];
+      return [createdEvent, ...messageEvents, timestampEvent, lifecycleEvent];
     }
 
     case "thread.delete": {

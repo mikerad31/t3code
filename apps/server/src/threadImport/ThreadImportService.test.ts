@@ -437,7 +437,7 @@ describe("ThreadImportService", () => {
     }),
   );
 
-  it.effect("preserves archived source metadata through scan and provider read", () =>
+  it.effect("imports archived Codex source metadata as an initially settled T3 thread", () =>
     Effect.gen(function* () {
       const externalThreadId = "codex-thread-archived";
       const archivedCandidate = sourceCandidate({
@@ -477,6 +477,11 @@ describe("ThreadImportService", () => {
       });
 
       expect(result.results[0]?.status).toBe("imported");
+      expect(harness.commands).toHaveLength(1);
+      const importCommand = harness.commands[0]!;
+      expect(importCommand.type).toBe("thread.import");
+      if (importCommand.type !== "thread.import") throw new Error("expected thread.import command");
+      expect(importCommand.settled).toBe(true);
       expect(readInputs).toEqual([
         {
           projectRoot: project.workspaceRoot,
