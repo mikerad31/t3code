@@ -16,16 +16,13 @@ import {
 const threadId = "01a03631-18a5-7f33-9fee-2e2faec86f92";
 const fallbackTimestamp = "2026-08-30T18:00:00.000Z";
 
-function fsEffect<A>(operation: () => Promise<A>): Effect.Effect<A, Error> {
-  return Effect.tryPromise({
-    try: operation,
-    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  });
+function fsEffect<A>(operation: () => Promise<A>): Effect.Effect<A> {
+  return Effect.tryPromise(operation).pipe(Effect.orDie);
 }
 
 function withTemporaryHome<A, E, R>(
   use: (homePath: string) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | Error, R> {
+): Effect.Effect<A, E, R> {
   return Effect.gen(function* () {
     const root = yield* fsEffect(() =>
       NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-codex-rollout-")),

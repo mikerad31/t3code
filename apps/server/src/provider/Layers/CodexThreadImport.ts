@@ -244,9 +244,7 @@ export function makeCodexThreadImport(input: {
     externalThreadId: string,
   ) =>
     Effect.flatMap(HostProcessPlatform, (platform) => {
-      if (
-        normalizePath(String(thread.cwd), platform) !== normalizePath(projectRoot, platform)
-      ) {
+      if (normalizePath(String(thread.cwd), platform) !== normalizePath(projectRoot, platform)) {
         return Effect.fail(
           new ProviderThreadImportError({
             operation: "read",
@@ -274,39 +272,37 @@ export function makeCodexThreadImport(input: {
         }),
       );
     }
-    return client
-      .request("thread/read", { threadId: externalThreadId, includeTurns: false })
-      .pipe(
-        Effect.flatMap((response) =>
-          ensureProjectThread(response.thread, projectRoot, externalThreadId),
-        ),
-        Effect.flatMap((thread) => {
-          const rolloutPath = (
-            thread as CodexSchema.V2ThreadReadResponse["thread"] & {
-              readonly path?: string | null;
-            }
-          ).path;
-          if (!rolloutPath) {
-            return Effect.fail(
-              new ProviderThreadImportError({
-                operation: "read",
-                detail: `Codex thread '${externalThreadId}' has no persisted rollout path for history fallback.`,
-              }),
-            );
+    return client.request("thread/read", { threadId: externalThreadId, includeTurns: false }).pipe(
+      Effect.flatMap((response) =>
+        ensureProjectThread(response.thread, projectRoot, externalThreadId),
+      ),
+      Effect.flatMap((thread) => {
+        const rolloutPath = (
+          thread as CodexSchema.V2ThreadReadResponse["thread"] & {
+            readonly path?: string | null;
           }
-          return readCodexRolloutTranscript({
-            rolloutPath,
-            historyHomePath: resolvedHomePath,
-            externalThreadId,
-            fallbackTimestamp: isoFromEpochSeconds(thread.createdAt, thread.updatedAt),
-            maxMessages: MAX_IMPORT_MESSAGES,
-          }).pipe(
-            Effect.map(({ messages, warnings }) =>
-              transcriptFromMessages(thread, archived, messages, warnings),
-            ),
+        ).path;
+        if (!rolloutPath) {
+          return Effect.fail(
+            new ProviderThreadImportError({
+              operation: "read",
+              detail: `Codex thread '${externalThreadId}' has no persisted rollout path for history fallback.`,
+            }),
           );
-        }),
-      );
+        }
+        return readCodexRolloutTranscript({
+          rolloutPath,
+          historyHomePath: resolvedHomePath,
+          externalThreadId,
+          fallbackTimestamp: isoFromEpochSeconds(thread.createdAt, thread.updatedAt),
+          maxMessages: MAX_IMPORT_MESSAGES,
+        }).pipe(
+          Effect.map(({ messages, warnings }) =>
+            transcriptFromMessages(thread, archived, messages, warnings),
+          ),
+        );
+      }),
+    );
   };
 
   return {
@@ -331,19 +327,17 @@ export function makeCodexThreadImport(input: {
     read: ({ projectRoot, externalThreadId, archived }) =>
       withClient(
         (client) =>
-          client
-            .request("thread/read", { threadId: externalThreadId, includeTurns: true })
-            .pipe(
-              Effect.flatMap((response) =>
-                ensureProjectThread(response.thread, projectRoot, externalThreadId),
-              ),
-              Effect.map((thread) => extractTranscript(thread, archived)),
-              Effect.catchAll((cause) =>
-                isUnsupportedCodexTurnHistoryError(cause)
-                  ? readPersistedRollout(client, projectRoot, externalThreadId, archived)
-                  : Effect.fail(cause),
-              ),
+          client.request("thread/read", { threadId: externalThreadId, includeTurns: true }).pipe(
+            Effect.flatMap((response) =>
+              ensureProjectThread(response.thread, projectRoot, externalThreadId),
             ),
+            Effect.map((thread) => extractTranscript(thread, archived)),
+            Effect.catch((cause) =>
+              isUnsupportedCodexTurnHistoryError(cause)
+                ? readPersistedRollout(client, projectRoot, externalThreadId, archived)
+                : Effect.fail(cause),
+            ),
+          ),
         "read",
       ),
   };

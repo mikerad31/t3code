@@ -4,6 +4,8 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import {
   type ProviderThreadImportMessage,
@@ -16,6 +18,8 @@ interface RolloutReadResult {
 }
 
 type JsonObject = Record<string, unknown>;
+
+const decodeJsonLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 function asObject(value: unknown): JsonObject | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -50,7 +54,9 @@ function timestampOrFallback(value: unknown, fallback: string): string {
 function messageFromResponseItem(
   row: JsonObject,
   fallbackTimestamp: string,
-): { readonly message: ProviderThreadImportMessage; readonly skippedRichInputs: number } | undefined {
+):
+  | { readonly message: ProviderThreadImportMessage; readonly skippedRichInputs: number }
+  | undefined {
   if (row.type !== "response_item") return undefined;
   const payload = asObject(row.payload);
   if (!payload || payload.type !== "message") return undefined;
@@ -160,13 +166,12 @@ export function readCodexRolloutTranscript(input: {
     for (const rawLine of contents.split(/\r?\n/u)) {
       const line = rawLine.trim();
       if (line.length === 0) continue;
-      let row: JsonObject | undefined;
-      try {
-        row = asObject(JSON.parse(line));
-      } catch {
+      const decoded = decodeJsonLine(line);
+      if (Option.isNone(decoded)) {
         malformedLines += 1;
         continue;
       }
+      const row = asObject(decoded.value);
       if (!row) continue;
       const responseMessage = messageFromResponseItem(row, input.fallbackTimestamp);
       if (responseMessage) {
