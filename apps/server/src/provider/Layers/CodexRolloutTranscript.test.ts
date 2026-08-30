@@ -1,11 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeAssert from "node:assert/strict";
-import * as NodeFs from "node:fs/promises";
-import * as NodeOs from "node:os";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, it } from "vite-plus/test";
+import { describe } from "vite-plus/test";
 
 import {
   isUnsupportedCodexTurnHistoryError,
@@ -15,13 +16,26 @@ import {
 const threadId = "01a03631-18a5-7f33-9fee-2e2faec86f92";
 const fallbackTimestamp = "2026-08-30T18:00:00.000Z";
 
-async function withTemporaryHome<A>(run: (homePath: string) => Promise<A>): Promise<A> {
-  const root = await NodeFs.mkdtemp(NodePath.join(NodeOs.tmpdir(), "t3-codex-rollout-"));
-  try {
-    return await run(NodePath.join(root, ".codex"));
-  } finally {
-    await NodeFs.rm(root, { recursive: true, force: true });
-  }
+function fsEffect<A>(operation: () => Promise<A>): Effect.Effect<A, Error> {
+  return Effect.tryPromise({
+    try: operation,
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  });
+}
+
+function withTemporaryHome<A, E, R>(
+  use: (homePath: string) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | Error, R> {
+  return Effect.gen(function* () {
+    const root = yield* fsEffect(() =>
+      NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-codex-rollout-")),
+    );
+    return yield* use(NodePath.join(root, ".codex")).pipe(
+      Effect.ensuring(
+        fsEffect(() => NodeFSP.rm(root, { recursive: true, force: true })).pipe(Effect.orDie),
+      ),
+    );
+  });
 }
 
 describe("isUnsupportedCodexTurnHistoryError", () => {
@@ -48,136 +62,140 @@ describe("isUnsupportedCodexTurnHistoryError", () => {
 });
 
 describe("readCodexRolloutTranscript", () => {
-  it("reconstructs canonical user and assistant messages without event duplicates", async () => {
-    await withTemporaryHome(async (homePath) => {
-      const archivedPath = NodePath.join(homePath, "archived_sessions");
-      await NodeFs.mkdir(archivedPath, { recursive: true });
-      const rolloutPath = NodePath.join(
-        archivedPath,
-        `rollout-2026-08-30T14-04-00-${threadId}.jsonl`,
-      );
-      const rows = [
-        {
-          timestamp: "2026-08-30T18:00:01.000Z",
-          type: "response_item",
-          payload: {
-            type: "message",
+  it.effect("reconstructs canonical user and assistant messages without event duplicates", () =>
+    withTemporaryHome((homePath) =>
+      Effect.gen(function* () {
+        const archivedPath = NodePath.join(homePath, "archived_sessions");
+        yield* fsEffect(() => NodeFSP.mkdir(archivedPath, { recursive: true }));
+        const rolloutPath = NodePath.join(
+          archivedPath,
+          `rollout-2026-08-30T14-04-00-${threadId}.jsonl`,
+        );
+        const rows = [
+          {
+            timestamp: "2026-08-30T18:00:01.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "hello from archived history" },
+                { type: "input_image", image_url: "file:///ignored.png" },
+              ],
+            },
+          },
+          {
+            timestamp: "2026-08-30T18:00:01.000Z",
+            type: "event_msg",
+            payload: { type: "user_message", message: "hello from archived history" },
+          },
+          {
+            timestamp: "2026-08-30T18:00:02.000Z",
+            type: "response_item",
+            payload: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "archived reply" }],
+            },
+          },
+          {
+            timestamp: "2026-08-30T18:00:02.000Z",
+            type: "event_msg",
+            payload: { type: "agent_message", message: "archived reply" },
+          },
+        ];
+        yield* fsEffect(() =>
+          NodeFSP.writeFile(
+            rolloutPath,
+            `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+            "utf8",
+          ),
+        );
+
+        const result = yield* readCodexRolloutTranscript({
+          rolloutPath,
+          historyHomePath: homePath,
+          externalThreadId: threadId,
+          fallbackTimestamp,
+          maxMessages: 2_000,
+        });
+
+        NodeAssert.deepStrictEqual(result.messages, [
+          {
             role: "user",
-            content: [
-              { type: "input_text", text: "hello from archived history" },
-              { type: "input_image", image_url: "file:///ignored.png" },
-            ],
+            text: "hello from archived history",
+            createdAt: "2026-08-30T18:00:01.000Z",
           },
-        },
-        {
-          timestamp: "2026-08-30T18:00:01.000Z",
-          type: "event_msg",
-          payload: { type: "user_message", message: "hello from archived history" },
-        },
-        {
-          timestamp: "2026-08-30T18:00:02.000Z",
-          type: "response_item",
-          payload: {
-            type: "message",
+          {
             role: "assistant",
-            content: [{ type: "output_text", text: "archived reply" }],
+            text: "archived reply",
+            createdAt: "2026-08-30T18:00:02.000Z",
           },
-        },
-        {
-          timestamp: "2026-08-30T18:00:02.000Z",
-          type: "event_msg",
-          payload: { type: "agent_message", message: "archived reply" },
-        },
-      ];
-      await NodeFs.writeFile(
-        rolloutPath,
-        `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
-        "utf8",
-      );
+        ]);
+        NodeAssert.deepStrictEqual(result.warnings, [
+          "1 non-text user input was omitted from the imported transcript.",
+        ]);
+      }),
+    ),
+  );
 
-      const result = await Effect.runPromise(
-        readCodexRolloutTranscript({
+  it.effect("uses legacy event records only when canonical response messages are absent", () =>
+    withTemporaryHome((homePath) =>
+      Effect.gen(function* () {
+        const sessionsPath = NodePath.join(homePath, "sessions", "2026", "08", "30");
+        yield* fsEffect(() => NodeFSP.mkdir(sessionsPath, { recursive: true }));
+        const rolloutPath = NodePath.join(
+          sessionsPath,
+          `rollout-2026-08-30T14-04-00-${threadId}.jsonl`,
+        );
+        yield* fsEffect(() =>
+          NodeFSP.writeFile(
+            rolloutPath,
+            [
+              JSON.stringify({
+                timestamp: "2026-08-30T18:00:03.000Z",
+                type: "event_msg",
+                payload: { type: "user_message", message: "legacy user" },
+              }),
+              JSON.stringify({
+                timestamp: "2026-08-30T18:00:04.000Z",
+                type: "event_msg",
+                payload: { type: "agent_message", message: "legacy assistant" },
+              }),
+            ].join("\n"),
+            "utf8",
+          ),
+        );
+
+        const result = yield* readCodexRolloutTranscript({
           rolloutPath,
           historyHomePath: homePath,
           externalThreadId: threadId,
           fallbackTimestamp,
           maxMessages: 2_000,
-        }),
-      );
+        });
 
-      NodeAssert.deepStrictEqual(result.messages, [
-        {
-          role: "user",
-          text: "hello from archived history",
-          createdAt: "2026-08-30T18:00:01.000Z",
-        },
-        {
-          role: "assistant",
-          text: "archived reply",
-          createdAt: "2026-08-30T18:00:02.000Z",
-        },
-      ]);
-      NodeAssert.deepStrictEqual(result.warnings, [
-        "1 non-text user input was omitted from the imported transcript.",
-      ]);
-    });
-  });
+        NodeAssert.deepStrictEqual(
+          result.messages.map(({ role, text }) => ({ role, text })),
+          [
+            { role: "user", text: "legacy user" },
+            { role: "assistant", text: "legacy assistant" },
+          ],
+        );
+        NodeAssert.deepStrictEqual(result.warnings, [
+          "The transcript was reconstructed from legacy Codex event records.",
+        ]);
+      }),
+    ),
+  );
 
-  it("uses legacy event records only when canonical response messages are absent", async () => {
-    await withTemporaryHome(async (homePath) => {
-      const sessionsPath = NodePath.join(homePath, "sessions", "2026", "08", "30");
-      await NodeFs.mkdir(sessionsPath, { recursive: true });
-      const rolloutPath = NodePath.join(
-        sessionsPath,
-        `rollout-2026-08-30T14-04-00-${threadId}.jsonl`,
-      );
-      await NodeFs.writeFile(
-        rolloutPath,
-        [
-          JSON.stringify({
-            timestamp: "2026-08-30T18:00:03.000Z",
-            type: "event_msg",
-            payload: { type: "user_message", message: "legacy user" },
-          }),
-          JSON.stringify({
-            timestamp: "2026-08-30T18:00:04.000Z",
-            type: "event_msg",
-            payload: { type: "agent_message", message: "legacy assistant" },
-          }),
-        ].join("\n"),
-        "utf8",
-      );
+  it.effect("rejects rollout paths outside the canonical Codex history home", () =>
+    withTemporaryHome((homePath) =>
+      Effect.gen(function* () {
+        const outsidePath = NodePath.join(NodePath.dirname(homePath), `rollout-${threadId}.jsonl`);
+        yield* fsEffect(() => NodeFSP.writeFile(outsidePath, "", "utf8"));
 
-      const result = await Effect.runPromise(
-        readCodexRolloutTranscript({
-          rolloutPath,
-          historyHomePath: homePath,
-          externalThreadId: threadId,
-          fallbackTimestamp,
-          maxMessages: 2_000,
-        }),
-      );
-
-      NodeAssert.deepStrictEqual(
-        result.messages.map(({ role, text }) => ({ role, text })),
-        [
-          { role: "user", text: "legacy user" },
-          { role: "assistant", text: "legacy assistant" },
-        ],
-      );
-      NodeAssert.deepStrictEqual(result.warnings, [
-        "The transcript was reconstructed from legacy Codex event records.",
-      ]);
-    });
-  });
-
-  it("rejects rollout paths outside the canonical Codex history home", async () => {
-    await withTemporaryHome(async (homePath) => {
-      const outsidePath = NodePath.join(NodePath.dirname(homePath), `rollout-${threadId}.jsonl`);
-      await NodeFs.writeFile(outsidePath, "", "utf8");
-
-      const result = await Effect.runPromise(
-        Effect.result(
+        const result = yield* Effect.result(
           readCodexRolloutTranscript({
             rolloutPath: outsidePath,
             historyHomePath: homePath,
@@ -185,13 +203,13 @@ describe("readCodexRolloutTranscript", () => {
             fallbackTimestamp,
             maxMessages: 2_000,
           }),
-        ),
-      );
+        );
 
-      NodeAssert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        NodeAssert.match(result.failure.detail, /unexpected history path/u);
-      }
-    });
-  });
+        NodeAssert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          NodeAssert.match(result.failure.detail, /unexpected history path/u);
+        }
+      }),
+    ),
+  );
 });
