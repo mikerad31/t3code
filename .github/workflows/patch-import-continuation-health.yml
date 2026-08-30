@@ -1,0 +1,234 @@
+name: Build import continuation health hardening
+
+on:
+  push:
+    branches:
+      - fix/import-continuation-health-shared-history
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply guarded importer hardening patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          BASE = "4fa2e0483261b7b6ecba5fc313742ff59c597185"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # An imported transcript stays healthy after a provider handoff when the
+          # current owner belongs to the same Codex continuation group and still
+          # points at the same native thread. The scanner account is not identity.
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''function hasMatchingCodexResumeBinding(\n  binding: ProviderRuntimeBinding | undefined,\n  input: {\n    readonly providerInstanceId: ProviderInstanceId;\n    readonly externalThreadId: string;\n  },\n): boolean {\n  return (\n    binding?.provider === CODEX_DRIVER &&\n    binding.providerInstanceId === input.providerInstanceId &&\n    codexResumeThreadId(binding.resumeCursor) === input.externalThreadId\n  );\n}\n''',
+              '''function hasMatchingCodexResumeBinding(\n  binding: ProviderRuntimeBinding | undefined,\n  input: {\n    readonly providerInstanceId: ProviderInstanceId;\n    readonly continuationKey: string;\n    readonly externalThreadId: string;\n    readonly instances: ReadonlyArray<ProviderInstance>;\n  },\n): boolean {\n  const boundInstance = input.instances.find(\n    (instance) => instance.instanceId === input.providerInstanceId,\n  );\n  return (\n    binding?.provider === CODEX_DRIVER &&\n    binding.providerInstanceId === input.providerInstanceId &&\n    codexResumeThreadId(binding.resumeCursor) === input.externalThreadId &&\n    boundInstance?.driverKind === CODEX_DRIVER &&\n    boundInstance.enabled &&\n    boundInstance.continuationIdentity.continuationKey === input.continuationKey\n  );\n}\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''      const instances = canonicalCodexInstances(\n        yield* providerInstances.listInstances,\n        project.defaultModelSelection?.instanceId,\n      );\n''',
+              '''      const allInstances = yield* providerInstances.listInstances;\n      const instances = canonicalCodexInstances(\n        allInstances,\n        project.defaultModelSelection?.instanceId,\n      );\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''          const nativeResumeReady =\n            !transcriptAlreadyImported ||\n            (persistedThread?.modelSelection.instanceId === instance.instanceId &&\n              hasMatchingCodexResumeBinding(persistedBinding, {\n                providerInstanceId: instance.instanceId,\n                externalThreadId: source.externalThreadId,\n              }));\n''',
+              '''          const nativeResumeReady =\n            !transcriptAlreadyImported ||\n            (persistedThread !== undefined &&\n              hasMatchingCodexResumeBinding(persistedBinding, {\n                providerInstanceId: persistedThread.modelSelection.instanceId,\n                continuationKey,\n                externalThreadId: source.externalThreadId,\n                instances: allInstances,\n              }));\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''      const scanned = yield* scanCandidates(project);\n      const byId = new Map(scanned.map((entry) => [String(entry.candidate.candidateId), entry]));\n      const importedIds = yield* existingThreadIds();\n''',
+              '''      const scanned = yield* scanCandidates(project);\n      const allInstances = yield* providerInstances.listInstances;\n      const byId = new Map(scanned.map((entry) => [String(entry.candidate.candidateId), entry]));\n      const importedIds = yield* existingThreadIds();\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''          if (\n            existingThread?.modelSelection.instanceId === source.instance.instanceId &&\n            hasMatchingCodexResumeBinding(persistedBinding, {\n              providerInstanceId: source.instance.instanceId,\n              externalThreadId: source.candidate.externalThreadId,\n            })\n          ) {\n''',
+              '''          if (\n            existingThread !== undefined &&\n            hasMatchingCodexResumeBinding(persistedBinding, {\n              providerInstanceId: existingThread.modelSelection.instanceId,\n              continuationKey: source.continuationKey,\n              externalThreadId: source.candidate.externalThreadId,\n              instances: allInstances,\n            })\n          ) {\n''',
+          )
+
+          # Codex import/history inspection is intentionally account-agnostic. An
+          # auth-overlay runtime keeps private auth in a shadow home, but persisted
+          # sessions/state live in the shared continuation home. Launch read-only
+          # import app-servers against the shared home so thread-store path scoping
+          # agrees with the rollout_path values it is reading.
+          replace_once(
+              "apps/server/src/provider/Layers/CodexThreadImport.ts",
+              '''export function makeCodexThreadImport(input: {\n  readonly config: CodexSettings;\n  readonly environment: NodeJS.ProcessEnv;\n  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];\n}): ProviderThreadImportShape {\n  const resolvedHomePath = input.config.homePath\n    ? expandHomePath(input.config.homePath)\n    : undefined;\n''',
+              '''export function makeCodexThreadImport(input: {\n  readonly config: CodexSettings;\n  readonly environment: NodeJS.ProcessEnv;\n  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];\n  /** Canonical persisted history home; distinct from per-account auth overlays. */\n  readonly historyHomePath?: string;\n}): ProviderThreadImportShape {\n  const resolvedHomePath = input.historyHomePath\n    ? expandHomePath(input.historyHomePath)\n    : input.config.homePath\n      ? expandHomePath(input.config.homePath)\n      : undefined;\n''',
+          )
+
+          replace_once(
+              "apps/server/src/provider/Layers/CodexThreadImport.ts",
+              '''const INTERACTIVE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;\n\nfunction normalizePath''',
+              '''const INTERACTIVE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;\n\nfunction causeDetail(cause: unknown): string | undefined {\n  if (cause instanceof Error && cause.message.trim().length > 0) return cause.message.trim();\n  if (typeof cause === "object" && cause !== null && "message" in cause) {\n    const message = cause.message;\n    if (typeof message === "string" && message.trim().length > 0) return message.trim();\n  }\n  return undefined;\n}\n\nfunction normalizePath''',
+          )
+
+          replace_once(
+              "apps/server/src/provider/Layers/CodexThreadImport.ts",
+              '''          : new ProviderThreadImportError({\n              operation: importOperation,\n              detail: `Codex app-server thread ${importOperation} failed.`,\n              cause,\n            }),\n''',
+              '''          : new ProviderThreadImportError({\n              operation: importOperation,\n              detail: (() => {\n                const detail = causeDetail(cause);\n                return detail === undefined\n                  ? `Codex app-server thread ${importOperation} failed.`\n                  : `Codex app-server thread ${importOperation} failed: ${detail}`;\n              })(),\n              cause,\n            }),\n''',
+          )
+
+          replace_once(
+              "apps/server/src/provider/Drivers/CodexDriver.ts",
+              '''      const threadImport = makeCodexThreadImport({\n        config: effectiveConfig,\n        environment: processEnv,\n        spawner,\n      });\n''',
+              '''      const threadImport = makeCodexThreadImport({\n        config: effectiveConfig,\n        environment: processEnv,\n        spawner,\n        // A1/A2/A3 share persisted history even when their auth lives in separate\n        // shadow homes. Read history from the canonical store, never an auth overlay.\n        historyHomePath: homeLayout.sharedHomePath,\n      });\n''',
+          )
+
+          # Regression for the exact real-world failure: importing under one account,
+          # handing the same native thread to another account in the same continuation
+          # group, then rescanning must remain already-imported and must not repair it
+          # back to the scanner account.
+          p = Path("apps/server/src/threadImport/ThreadImportService.test.ts")
+          text = p.read_text(encoding="utf-8")
+          marker = '''  it.effect(\n    "prefers the project's configured Codex instance when several accounts share one history store",\n'''
+          if text.count(marker) != 1:
+              raise SystemExit("ThreadImportService.test.ts: preferred-provider marker drifted")
+          addition = dedent(r'''
+            it.effect(
+              "keeps a handed-off Codex account healthy when it shares the same continuation store",
+              () =>
+                Effect.gen(function* () {
+                  const handedOffInstanceId = ProviderInstanceId.make("codex-handed-off-account");
+                  const sharedImport: ProviderThreadImportShape = {
+                    scan: () => Effect.succeed([sourceCandidate()]),
+                    read: () => Effect.succeed(sourceTranscript()),
+                  };
+                  const scannerProvider = makeProvider(sharedImport, {
+                    providerInstanceId: instanceId,
+                    continuationKey: "codex:shared-home",
+                  });
+                  const handedOffProvider = makeProvider(sharedImport, {
+                    providerInstanceId: handedOffInstanceId,
+                    continuationKey: "codex:shared-home",
+                  });
+                  const harness = makeHarness({
+                    candidates: [sourceCandidate()],
+                    read: () => Effect.succeed(sourceTranscript()),
+                    providers: [scannerProvider, handedOffProvider],
+                  });
+
+                  const initialScan = yield* harness.service.scan({ projectId });
+                  const candidateId = initialScan.candidates[0]!.candidateId;
+                  const initialCommit = yield* harness.service.commit({
+                    projectId,
+                    candidateIds: [candidateId],
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                  });
+                  expect(initialCommit.results[0]?.status).toBe("imported");
+                  expect(harness.commands).toHaveLength(1);
+                  expect(harness.bindings).toHaveLength(1);
+
+                  const handedOffSelection = {
+                    instanceId: handedOffInstanceId,
+                    model: "gpt-5.6-luna",
+                  };
+                  harness.setImportedModelSelection(handedOffSelection);
+                  harness.bindings[0] = {
+                    ...harness.bindings[0]!,
+                    providerInstanceId: handedOffInstanceId,
+                    resumeCursor: { threadId: sourceCandidate().externalThreadId },
+                    runtimePayload: {
+                      ...harness.bindings[0]!.runtimePayload,
+                      modelSelection: handedOffSelection,
+                    },
+                  };
+
+                  const postHandoffScan = yield* harness.service.scan({ projectId });
+                  expect(postHandoffScan.candidates[0]).toMatchObject({
+                    candidateId,
+                    alreadyImported: true,
+                    canResume: true,
+                  });
+                  expect(postHandoffScan.candidates[0]?.warnings.join(" ")).not.toContain(
+                    "needs repair",
+                  );
+
+                  const postHandoffCommit = yield* harness.service.commit({
+                    projectId,
+                    candidateIds: [candidateId],
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                  });
+                  expect(postHandoffCommit.results[0]?.status).toBe("already-imported");
+                  expect(harness.commands).toHaveLength(1);
+                  expect(harness.bindings).toHaveLength(1);
+                  expect(harness.bindings[0]?.providerInstanceId).toBe(handedOffInstanceId);
+                }),
+            );
+
+          ''')
+          p.write_text(text.replace(marker, addition + marker, 1), encoding="utf-8")
+          PY
+
+      - name: Remove disposable workflow
+        run: rm .github/workflows/patch-import-continuation-health.yml
+
+      - name: Format
+        run: vp fmt
+
+      - name: Exact product surface
+        run: |
+          git diff --name-only 4fa2e0483261b7b6ecba5fc313742ff59c597185 | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/provider/Drivers/CodexDriver.ts
+          apps/server/src/provider/Layers/CodexThreadImport.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused importer regression
+        run: cd apps/server && vp test run src/threadImport/ThreadImportService.test.ts
+
+      - name: Full server suite
+        run: cd apps/server && vp test run
+
+      - name: Monorepo typecheck
+        run: vp run typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src
+
+      - name: Commit validated product patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m "fix(import): honor Codex continuation groups [continuation-health]"
+          git push origin HEAD:fix/import-continuation-health-shared-history
