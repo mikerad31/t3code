@@ -13,6 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           sparse-checkout: |
             /*
             !/.repos/
@@ -52,4 +53,13 @@ jobs:
       - name: Diff sanity
         run: |
           git diff --check de480af8fa248640ea5ea61398c46163f14eacd2...HEAD
-          test -z "$(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -E '^(.github/workflows/(?!validate-codex-rollout-import-fallback.yml)|package.json|pnpm-lock.yaml)' || true)"
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/validate-codex-rollout-import-fallback.yml|apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts)
+                ;;
+              *)
+                echo "Unexpected changed path: $path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD)
