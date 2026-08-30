@@ -95,11 +95,37 @@ jobs:
           git diff --check
           ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src
 
-      - name: Commit validated product patch
+      - name: Package exact validated product patch
+        shell: bash
         run: |
+          files=(
+            apps/server/src/provider/Drivers/CodexDriver.ts
+            apps/server/src/provider/Layers/CodexThreadImport.ts
+            apps/server/src/threadImport/ThreadImportService.test.ts
+            apps/server/src/threadImport/ThreadImportService.ts
+          )
+
+          # Snapshot the exact bytes that passed every gate above. Then return the
+          # runner to the clean main baseline and restore only those four files so
+          # disposable validator workflows can never leak into the product branch.
+          tar -cf /tmp/import-continuation-product.tar "${files[@]}"
+          git reset --hard 4fa2e0483261b7b6ecba5fc313742ff59c597185
+          tar -xf /tmp/import-continuation-product.tar
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add "${files[@]}"
+
           test "$(git diff --cached --name-only | wc -l)" -eq 4
-          git commit -m "fix(import): honor Codex continuation groups [continuation-health]"
-          git push origin HEAD:fix/import-continuation-health-shared-history
+          git diff --cached --name-only | sort > /tmp/packaged.txt
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/provider/Drivers/CodexDriver.ts
+          apps/server/src/provider/Layers/CodexThreadImport.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          EOF
+          diff -u /tmp/expected.txt /tmp/packaged.txt
+          git diff --cached --check
+
+          git commit -m "fix(import): honor Codex continuation groups"
+          git push origin HEAD:fix/import-continuation-health-final
