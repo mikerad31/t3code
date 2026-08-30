@@ -29,7 +29,7 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Apply Codex resume compatibility fix
+      - name: Apply validated Codex compatibility fixes
         run: |
           python <<'PY'
           from pathlib import Path
@@ -65,38 +65,86 @@ jobs:
           )
           runtime_path.write_text(runtime)
 
-          test_path = Path("apps/server/src/provider/Layers/CodexSessionRuntime.test.ts")
-          test = test_path.read_text()
-          test = replace_once(
-              test,
+          session_test_path = Path("apps/server/src/provider/Layers/CodexSessionRuntime.test.ts")
+          session_test = session_test_path.read_text()
+          session_test = replace_once(
+              session_test,
               '''    sandbox: { type: "danger-full-access" },\n    thread: {\n      id: threadId,\n      createdAt: "2026-04-18T00:00:00.000Z",\n      source: { session: "cli" },\n      turns: [],\n      status: {\n        state: "idle",\n        activeFlags: [],\n      },\n    },\n''',
               '''    sandbox: { type: "dangerFullAccess" },\n    thread: {\n      id: threadId,\n      cliVersion: "0.147.0",\n      createdAt: 1_776_470_400,\n      cwd: "/tmp/project",\n      ephemeral: false,\n      modelProvider: "openai",\n      preview: "",\n      sessionId: threadId,\n      source: "cli",\n      turns: [],\n      status: { type: "idle" },\n      updatedAt: 1_776_470_400,\n    },\n''',
               "raw resume response fixture",
           )
-          test = replace_once(
-              test,
+          session_test = replace_once(
+              session_test,
               '''      const client = {\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          calls.push({ method, payload });\n          if (method === "thread/resume") {\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "thread not found",\n              }),\n            );\n          }\n          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);\n        },\n      };\n''',
               '''      const client = {\n        raw: {\n          request: (method: string, payload?: unknown) => {\n            calls.push({ method: method as "thread/resume", payload });\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "thread not found",\n              }),\n            );\n          },\n        },\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          calls.push({ method, payload });\n          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);\n        },\n      };\n''',
               "recoverable resume mock",
           )
-          test = replace_once(
-              test,
+          session_test = replace_once(
+              session_test,
               '''      const client = {\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          _payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          if (method === "thread/resume") {\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "timed out waiting for server",\n              }),\n            );\n          }\n          return Effect.succeed(\n            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],\n          );\n        },\n      };\n''',
               '''      const client = {\n        raw: {\n          request: () =>\n            Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "timed out waiting for server",\n              }),\n            ),\n        },\n        request: <M extends "thread/start" | "thread/resume">(\n          _method: M,\n          _payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          return Effect.succeed(\n            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],\n          );\n        },\n      };\n''',
               "non-recoverable resume mock",
           )
           regression_name = '  it.effect("resumes without returning historical turns", () =>\n'
-          if regression_name not in test:
+          if regression_name not in session_test:
               final_close = '''    }),\n  );\n});\n'''
-              pos = test.rfind(final_close)
+              pos = session_test.rfind(final_close)
               if pos < 0:
                   raise SystemExit("openCodexThread describe close not found")
               regression = '''    }),\n  );\n\n  it.effect("resumes without returning historical turns", () =>\n    Effect.gen(function* () {\n      const calls: Array<{ method: string; payload: unknown }> = [];\n      const resumed = makeThreadOpenResponse("resumed-thread");\n      const client = {\n        raw: {\n          request: (method: string, payload?: unknown) => {\n            calls.push({ method, payload });\n            return Effect.succeed(resumed);\n          },\n        },\n        request: <M extends "thread/start" | "thread/resume">(\n          _method: M,\n          _payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => Effect.succeed(resumed as CodexRpc.ClientRequestResponsesByMethod[M]),\n      };\n\n      const opened = yield* openCodexThread({\n        client,\n        threadId: ThreadId.make("thread-1"),\n        runtimeMode: "full-access",\n        cwd: "/tmp/project",\n        requestedModel: "gpt-5.3-codex",\n        serviceTier: undefined,\n        resumeThreadId: "existing-thread",\n      });\n\n      NodeAssert.equal(opened.thread.id, "resumed-thread");\n      NodeAssert.deepStrictEqual(calls, [\n        {\n          method: "thread/resume",\n          payload: {\n            threadId: "existing-thread",\n            cwd: "/tmp/project",\n            approvalPolicy: "never",\n            sandbox: "danger-full-access",\n            approvalsReviewer: "user",\n            model: "gpt-5.3-codex",\n            excludeTurns: true,\n          },\n        },\n      ]);\n    }),\n  );\n});\n'''
-              test = test[:pos] + regression + test[pos + len(final_close):]
+              session_test = session_test[:pos] + regression + session_test[pos + len(final_close):]
               print("excludeTurns regression test: applied")
           else:
               print("excludeTurns regression test: already applied")
-          test_path.write_text(test)
+          session_test_path.write_text(session_test)
+
+          rollout_test_path = Path("apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts")
+          rollout_test = rollout_test_path.read_text()
+          rollout_test = replace_once(
+              rollout_test,
+              '''function fsEffect<A>(operation: () => Promise<A>): Effect.Effect<A, Error> {\n  return Effect.tryPromise({\n    try: operation,\n    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),\n  });\n}\n''',
+              '''function fsEffect<A>(operation: () => Promise<A>): Effect.Effect<A> {\n  return Effect.tryPromise(operation).pipe(Effect.orDie);\n}\n''',
+              "test filesystem effect channel",
+          )
+          rollout_test = replace_once(
+              rollout_test,
+              '''): Effect.Effect<A, E | Error, R> {\n''',
+              '''): Effect.Effect<A, E, R> {\n''',
+              "temporary home error channel",
+          )
+          rollout_test_path.write_text(rollout_test)
+
+          transcript_path = Path("apps/server/src/provider/Layers/CodexRolloutTranscript.ts")
+          transcript = transcript_path.read_text()
+          transcript = replace_once(
+              transcript,
+              'import * as Effect from "effect/Effect";\n',
+              'import * as Effect from "effect/Effect";\nimport * as Option from "effect/Option";\nimport * as Schema from "effect/Schema";\n',
+              "schema JSON imports",
+          )
+          transcript = replace_once(
+              transcript,
+              'type JsonObject = Record<string, unknown>;\n',
+              'type JsonObject = Record<string, unknown>;\n\nconst decodeJsonLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));\n',
+              "schema JSON decoder",
+          )
+          transcript = replace_once(
+              transcript,
+              '''      let row: JsonObject | undefined;\n      try {\n        row = asObject(JSON.parse(line));\n      } catch {\n        malformedLines += 1;\n        continue;\n      }\n''',
+              '''      const decoded = decodeJsonLine(line);\n      if (Option.isNone(decoded)) {\n        malformedLines += 1;\n        continue;\n      }\n      const row = asObject(decoded.value);\n''',
+              "schema JSON parsing",
+          )
+          transcript_path.write_text(transcript)
+
+          import_path = Path("apps/server/src/provider/Layers/CodexThreadImport.ts")
+          thread_import = import_path.read_text()
+          thread_import = replace_once(
+              thread_import,
+              '              Effect.catchAll((cause) =>\n',
+              '              Effect.catch((cause) =>\n',
+              "Effect v4 catch operator",
+          )
+          import_path.write_text(thread_import)
           PY
 
       - name: Format product slice
@@ -124,8 +172,7 @@ jobs:
           diff -u <(printf '%s\n' "${expected[@]}" | sort) /tmp/actual-product-paths
           for path in "${working[@]}"; do
             case "$path" in
-              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts)
-                ;;
+              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts) ;;
               *) echo "Patch/formatter changed unexpected path: $path" >&2; exit 1 ;;
             esac
           done
