@@ -1,0 +1,99 @@
+name: Build typed import continuation health hardening
+
+on:
+  push:
+    branches:
+      - fix/import-continuation-health-shared-history
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Reproduce guarded product patch
+        shell: bash
+        run: |
+          awk '
+            /- name: Apply guarded importer hardening patch/ { wanted=1; next }
+            wanted && /run: \|/ { capture=1; next }
+            capture && /^      - name:/ { exit }
+            capture {
+              sub(/^          /, "")
+              print
+            }
+          ' .github/workflows/patch-import-continuation-health.yml > /tmp/apply-import-patch.sh
+          bash /tmp/apply-import-patch.sh
+
+      - name: Apply test typing correction
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("apps/server/src/threadImport/ThreadImportService.test.ts")
+          text = p.read_text(encoding="utf-8")
+          old = '''                    runtimePayload: {\n                      ...harness.bindings[0]!.runtimePayload,\n                      modelSelection: handedOffSelection,\n                    },\n'''
+          new = '''                    runtimePayload: {\n                      modelSelection: handedOffSelection,\n                    },\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one runtimePayload test spread, found {text.count(old)}")
+          p.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Remove disposable workflows
+        run: |
+          rm .github/workflows/patch-import-continuation-health.yml
+          rm .github/workflows/diagnose-import-continuation-typecheck.yml
+          rm .github/workflows/patch-import-continuation-health-v2.yml
+
+      - name: Format
+        run: vp fmt
+
+      - name: Exact product surface
+        run: |
+          git diff --name-only 4fa2e0483261b7b6ecba5fc313742ff59c597185 | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/provider/Drivers/CodexDriver.ts
+          apps/server/src/provider/Layers/CodexThreadImport.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused importer regression
+        run: cd apps/server && vp test run src/threadImport/ThreadImportService.test.ts
+
+      - name: Full server suite
+        run: cd apps/server && vp test run
+
+      - name: Monorepo typecheck
+        run: vp run typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src
+
+      - name: Commit validated product patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m "fix(import): honor Codex continuation groups [continuation-health]"
+          git push origin HEAD:fix/import-continuation-health-shared-history
