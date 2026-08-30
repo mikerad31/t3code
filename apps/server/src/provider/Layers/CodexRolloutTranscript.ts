@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFs from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
@@ -143,7 +143,7 @@ export function readCodexRolloutTranscript(input: {
     }
 
     const contents = yield* Effect.tryPromise({
-      try: () => NodeFs.readFile(rolloutPath, "utf8"),
+      try: () => NodeFSP.readFile(rolloutPath, "utf8"),
       catch: (cause) =>
         new ProviderThreadImportError({
           operation: "read",
