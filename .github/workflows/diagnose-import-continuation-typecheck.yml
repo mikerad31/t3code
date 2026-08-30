@@ -27,10 +27,11 @@ jobs:
         shell: bash
         run: |
           awk '
-            /- name: Apply guarded importer hardening patch/ { capture=1; next }
-            capture && /- name: Remove disposable workflow/ { exit }
+            /- name: Apply guarded importer hardening patch/ { wanted=1; next }
+            wanted && /run: \|/ { capture=1; next }
+            capture && /^      - name:/ { exit }
             capture {
-              sub(/^        /, "")
+              sub(/^          /, "")
               print
             }
           ' .github/workflows/patch-import-continuation-health.yml > /tmp/apply-import-patch.sh
