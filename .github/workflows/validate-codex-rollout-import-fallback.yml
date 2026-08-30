@@ -45,59 +45,48 @@ jobs:
 
           runtime_path = Path("apps/server/src/provider/Layers/CodexSessionRuntime.ts")
           runtime = runtime_path.read_text()
-
           runtime = replace_once(
               runtime,
               'const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);\n',
               'const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);\nconst decodeV2ThreadResumeResponse = Schema.decodeUnknownEffect(\n  EffectCodexSchema.V2ThreadResumeResponse,\n);\n',
               "thread/resume response decoder",
           )
-
           runtime = replace_once(
               runtime,
               '''interface CodexThreadOpenClient {\n  readonly request: <M extends CodexThreadOpenMethod>(\n    method: M,\n    payload: CodexRpc.ClientRequestParamsByMethod[M],\n  ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;\n}\n''',
               '''interface CodexThreadOpenClient {\n  readonly raw: {\n    readonly request: (\n      method: string,\n      payload?: unknown,\n    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;\n  };\n  readonly request: <M extends CodexThreadOpenMethod>(\n    method: M,\n    payload: CodexRpc.ClientRequestParamsByMethod[M],\n  ) => Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError>;\n}\n''',
               "raw thread-open client surface",
           )
-
           runtime = replace_once(
               runtime,
               '''  return input.client\n    .request("thread/resume", {\n      threadId: resumeThreadId,\n      ...startParams,\n    })\n    .pipe(\n      Effect.catchIf(isRecoverableThreadResumeError, (error) =>\n''',
               '''  return input.client.raw\n    .request("thread/resume", {\n      threadId: resumeThreadId,\n      ...startParams,\n      // T3 already persists the visible transcript. Asking Codex to rebuild and\n      // return every historical turn can make large resumes exhaust the local\n      // backend before the session becomes ready.\n      excludeTurns: true,\n    })\n    .pipe(\n      Effect.flatMap((rawResponse) =>\n        decodeV2ThreadResumeResponse(rawResponse).pipe(\n          Effect.mapError((error) =>\n            CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(\n              "decode-response-payload",\n              error,\n              { method: "thread/resume" },\n            ),\n          ),\n        ),\n      ),\n      Effect.catchIf(isRecoverableThreadResumeError, (error) =>\n''',
               "exclude historical turns on resume",
           )
-
           runtime_path.write_text(runtime)
 
           test_path = Path("apps/server/src/provider/Layers/CodexSessionRuntime.test.ts")
           test = test_path.read_text()
-
           test = replace_once(
               test,
               '''    sandbox: { type: "danger-full-access" },\n    thread: {\n      id: threadId,\n      createdAt: "2026-04-18T00:00:00.000Z",\n      source: { session: "cli" },\n      turns: [],\n      status: {\n        state: "idle",\n        activeFlags: [],\n      },\n    },\n''',
               '''    sandbox: { type: "dangerFullAccess" },\n    thread: {\n      id: threadId,\n      cliVersion: "0.147.0",\n      createdAt: 1_776_470_400,\n      cwd: "/tmp/project",\n      ephemeral: false,\n      modelProvider: "openai",\n      preview: "",\n      sessionId: threadId,\n      source: "cli",\n      turns: [],\n      status: { type: "idle" },\n      updatedAt: 1_776_470_400,\n    },\n''',
               "raw resume response fixture",
           )
-
           test = replace_once(
               test,
               '''      const client = {\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          calls.push({ method, payload });\n          if (method === "thread/resume") {\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "thread not found",\n              }),\n            );\n          }\n          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);\n        },\n      };\n''',
               '''      const client = {\n        raw: {\n          request: (method: string, payload?: unknown) => {\n            calls.push({ method: method as "thread/resume", payload });\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "thread not found",\n              }),\n            );\n          },\n        },\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          calls.push({ method, payload });\n          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);\n        },\n      };\n''',
               "recoverable resume mock",
           )
-
           test = replace_once(
               test,
               '''      const client = {\n        request: <M extends "thread/start" | "thread/resume">(\n          method: M,\n          _payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          if (method === "thread/resume") {\n            return Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "timed out waiting for server",\n              }),\n            );\n          }\n          return Effect.succeed(\n            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],\n          );\n        },\n      };\n''',
               '''      const client = {\n        raw: {\n          request: () =>\n            Effect.fail(\n              new CodexErrors.CodexAppServerRequestError({\n                code: -32603,\n                errorMessage: "timed out waiting for server",\n              }),\n            ),\n        },\n        request: <M extends "thread/start" | "thread/resume">(\n          _method: M,\n          _payload: CodexRpc.ClientRequestParamsByMethod[M],\n        ) => {\n          return Effect.succeed(\n            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],\n          );\n        },\n      };\n''',
               "non-recoverable resume mock",
           )
-
-          marker = '''  it.effect("propagates non-recoverable resume failures", () =>\n    Effect.gen(function* () {\n'''
           regression_name = '  it.effect("resumes without returning historical turns", () =>\n'
           if regression_name not in test:
-              if marker not in test:
-                  raise SystemExit("resume regression insertion point not found")
               final_close = '''    }),\n  );\n});\n'''
               pos = test.rfind(final_close)
               if pos < 0:
@@ -107,7 +96,6 @@ jobs:
               print("excludeTurns regression test: applied")
           else:
               print("excludeTurns regression test: already applied")
-
           test_path.write_text(test)
           PY
 
@@ -123,7 +111,7 @@ jobs:
 
       - name: Exact product surface
         run: |
-          mapfile -t files < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -v '^.github/workflows/validate-codex-rollout-import-fallback.yml$' | sort)
+          mapfile -t committed < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -v '^.github/workflows/validate-codex-rollout-import-fallback.yml$' | sort)
           mapfile -t working < <(git diff --name-only | sort)
           expected=(
             apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts
@@ -132,19 +120,13 @@ jobs:
             apps/server/src/provider/Layers/CodexSessionRuntime.ts
             apps/server/src/provider/Layers/CodexThreadImport.ts
           )
-          printf '%s\n' "${files[@]}"
-          test "${#files[@]}" -eq "${#expected[@]}"
-          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${files[@]}"; printf '%s\n' "${working[@]}") | grep '^+' || true
-          combined=$(printf '%s\n' "${files[@]}" "${working[@]}" | sed '/^$/d' | sort -u)
-          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "$combined")
+          printf '%s\n' "${committed[@]}" "${working[@]}" | sed '/^$/d' | sort -u > /tmp/actual-product-paths
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) /tmp/actual-product-paths
           for path in "${working[@]}"; do
             case "$path" in
               apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts)
                 ;;
-              *)
-                echo "Formatter/patch changed unexpected path: $path" >&2
-                exit 1
-                ;;
+              *) echo "Patch/formatter changed unexpected path: $path" >&2; exit 1 ;;
             esac
           done
 
@@ -175,22 +157,14 @@ jobs:
           git diff --check
           while IFS= read -r path; do
             case "$path" in
-              .github/workflows/validate-codex-rollout-import-fallback.yml|apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts)
-                ;;
-              *)
-                echo "Unexpected changed path: $path" >&2
-                exit 1
-                ;;
+              .github/workflows/validate-codex-rollout-import-fallback.yml|apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts) ;;
+              *) echo "Unexpected changed path: $path" >&2; exit 1 ;;
             esac
           done < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD)
           while IFS= read -r path; do
             case "$path" in
-              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts)
-                ;;
-              *)
-                echo "Unexpected working-tree path: $path" >&2
-                exit 1
-                ;;
+              apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts|apps/server/src/provider/Layers/CodexRolloutTranscript.ts|apps/server/src/provider/Layers/CodexThreadImport.ts|apps/server/src/provider/Layers/CodexSessionRuntime.test.ts|apps/server/src/provider/Layers/CodexSessionRuntime.ts) ;;
+              *) echo "Unexpected working-tree path: $path" >&2; exit 1 ;;
             esac
           done < <(git diff --name-only)
 
