@@ -1,0 +1,204 @@
+name: Build archived Codex import settlement patch v2
+
+on:
+  push:
+    branches:
+      - fix/import-archived-codex-settled
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply guarded archived-import settlement patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "packages/contracts/src/orchestration.ts",
+              '''  messages: Schema.Array(ThreadImportCommandMessage),\n  createdAt: IsoDateTime,\n''',
+              '''  messages: Schema.Array(ThreadImportCommandMessage),\n  // Historical imports can arrive settled without transiently entering the active inbox.\n  settled: Schema.optional(Schema.Boolean),\n  createdAt: IsoDateTime,\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.ts",
+              '''              interactionMode: request.interactionMode,\n              messages,\n              createdAt: transcript.createdAt,\n''',
+              '''              interactionMode: request.interactionMode,\n              messages,\n              settled: source.archived,\n              createdAt: transcript.createdAt,\n''',
+          )
+
+          replace_once(
+              "apps/server/src/orchestration/decider.ts",
+              '''      const activeEvent: Omit<OrchestrationEvent, "sequence"> = {\n        ...(yield* withEventBase({\n          aggregateKind: "thread",\n          aggregateId: command.threadId,\n          occurredAt: command.updatedAt,\n          commandId: command.commandId,\n        })),\n        type: "thread.unsettled",\n        payload: {\n          threadId: command.threadId,\n          reason: "user",\n          updatedAt: command.updatedAt,\n        },\n      };\n\n      return [createdEvent, ...messageEvents, timestampEvent, activeEvent];\n''',
+              '''      const lifecycleEvent: Omit<OrchestrationEvent, "sequence"> =\n        command.settled === true\n          ? {\n              ...(yield* withEventBase({\n                aggregateKind: "thread",\n                aggregateId: command.threadId,\n                occurredAt: command.updatedAt,\n                commandId: command.commandId,\n              })),\n              type: "thread.settled",\n              payload: {\n                threadId: command.threadId,\n                settledAt: command.updatedAt,\n                updatedAt: command.updatedAt,\n              },\n            }\n          : {\n              ...(yield* withEventBase({\n                aggregateKind: "thread",\n                aggregateId: command.threadId,\n                occurredAt: command.updatedAt,\n                commandId: command.commandId,\n              })),\n              type: "thread.unsettled",\n              payload: {\n                threadId: command.threadId,\n                reason: "user",\n                updatedAt: command.updatedAt,\n              },\n            };\n\n      return [createdEvent, ...messageEvents, timestampEvent, lifecycleEvent];\n''',
+          )
+
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.test.ts",
+              '''  it.effect("preserves archived source metadata through scan and provider read", () =>\n''',
+              '''  it.effect("imports archived Codex source metadata as an initially settled T3 thread", () =>\n''',
+          )
+          replace_once(
+              "apps/server/src/threadImport/ThreadImportService.test.ts",
+              '''      expect(result.results[0]?.status).toBe("imported");\n      expect(readInputs).toEqual([\n''',
+              '''      expect(result.results[0]?.status).toBe("imported");\n      expect(harness.commands).toHaveLength(1);\n      const importCommand = harness.commands[0]!;\n      expect(importCommand.type).toBe("thread.import");\n      if (importCommand.type !== "thread.import") throw new Error("expected thread.import command");\n      expect(importCommand.settled).toBe(true);\n      expect(readInputs).toEqual([\n''',
+          )
+
+          p = Path("apps/server/src/orchestration/decider.threadImport.test.ts")
+          text = p.read_text(encoding="utf-8")
+          marker = "\n});\n"
+          if not text.endswith(marker):
+              raise SystemExit("decider.threadImport.test.ts: unexpected file ending")
+          addition = dedent(r'''
+
+            it.effect(
+              "materializes an archived historical import directly settled with historical timestamps",
+              () =>
+                Effect.gen(function* () {
+                  const projectId = ProjectId.make("project-thread-import-settled");
+                  const threadId = ThreadId.make("thread-thread-import-settled");
+                  const readModel: OrchestrationReadModel = {
+                    snapshotSequence: 0,
+                    projects: [
+                      {
+                        id: projectId,
+                        title: "Imported project",
+                        workspaceRoot: "/workspace/imported",
+                        defaultModelSelection: null,
+                        defaultThreadEnvMode: null,
+                        faviconPath: null,
+                        scripts: [],
+                        createdAt: CREATED_AT,
+                        updatedAt: CREATED_AT,
+                        deletedAt: null,
+                      },
+                    ],
+                    threads: [],
+                    updatedAt: CREATED_AT,
+                  };
+
+                  const result = yield* decideOrchestrationCommand({
+                    command: {
+                      type: "thread.import",
+                      commandId: CommandId.make("cmd-thread-import-settled"),
+                      threadId,
+                      projectId,
+                      title: "Archived historical Codex chat",
+                      modelSelection: {
+                        instanceId: ProviderInstanceId.make("codex-account"),
+                        model: "gpt-5.6-codex",
+                      },
+                      runtimeMode: "full-access",
+                      interactionMode: "default",
+                      messages: [
+                        {
+                          id: MessageId.make("archived-historical-user-message"),
+                          role: "user",
+                          text: "Archived historical user message",
+                          createdAt: MESSAGE_AT,
+                        },
+                      ],
+                      settled: true,
+                      createdAt: CREATED_AT,
+                      updatedAt: UPDATED_AT,
+                    },
+                    readModel,
+                  });
+                  const events = Array.isArray(result) ? result : [result];
+                  expect(events.map((event) => event.type)).toEqual([
+                    "thread.created",
+                    "thread.message-sent",
+                    "thread.meta-updated",
+                    "thread.settled",
+                  ]);
+
+                  let projected = readModel;
+                  let sequence = 0;
+                  for (const event of events) {
+                    sequence += 1;
+                    projected = yield* projectEvent(projected, { ...event, sequence });
+                  }
+                  expect(projected.threads[0]).toMatchObject({
+                    id: threadId,
+                    settledOverride: "settled",
+                    settledAt: UPDATED_AT,
+                    createdAt: CREATED_AT,
+                    updatedAt: UPDATED_AT,
+                  });
+                }),
+            );
+          ''')
+          p.write_text(text[:-len(marker)] + addition + marker, encoding="utf-8")
+          PY
+
+      - name: Remove disposable workflow wrappers
+        run: |
+          rm .github/workflows/patch-archived-import-settled.yml
+          rm .github/workflows/patch-archived-import-settled-v2.yml
+
+      - name: Format
+        run: vp fmt
+
+      - name: Exact product surface
+        run: |
+          git diff --name-only b96f0a7e874b41cc053de4191cddf70ca9162dea | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          apps/server/src/orchestration/decider.threadImport.test.ts
+          apps/server/src/orchestration/decider.ts
+          apps/server/src/threadImport/ThreadImportService.test.ts
+          apps/server/src/threadImport/ThreadImportService.ts
+          packages/contracts/src/orchestration.ts
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused archived import tests
+        run: |
+          cd apps/server
+          vp test run src/orchestration/decider.threadImport.test.ts src/threadImport/ThreadImportService.test.ts
+
+      - name: Full server suite
+        run: cd apps/server && vp test run
+
+      - name: Monorepo typecheck
+        run: vp run typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          ! git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- apps/server/src packages/contracts/src
+
+      - name: Commit validated product patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test "$(git diff --cached --name-only | wc -l)" -eq 7
+          git commit -m "fix(import): settle archived Codex conversations [archived-settled]"
+          git push origin HEAD:fix/import-archived-codex-settled
