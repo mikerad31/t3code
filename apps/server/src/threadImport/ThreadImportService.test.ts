@@ -589,6 +589,76 @@ describe("ThreadImportService", () => {
   );
 
   it.effect(
+    "keeps a handed-off Codex account healthy when it shares the same continuation store",
+    () =>
+      Effect.gen(function* () {
+        const handedOffInstanceId = ProviderInstanceId.make("codex-handed-off-account");
+        const sharedImport: ProviderThreadImportShape = {
+          scan: () => Effect.succeed([sourceCandidate()]),
+          read: () => Effect.succeed(sourceTranscript()),
+        };
+        const scannerProvider = makeProvider(sharedImport, {
+          providerInstanceId: instanceId,
+          continuationKey: "codex:shared-home",
+        });
+        const handedOffProvider = makeProvider(sharedImport, {
+          providerInstanceId: handedOffInstanceId,
+          continuationKey: "codex:shared-home",
+        });
+        const harness = makeHarness({
+          candidates: [sourceCandidate()],
+          read: () => Effect.succeed(sourceTranscript()),
+          providers: [scannerProvider, handedOffProvider],
+        });
+
+        const initialScan = yield* harness.service.scan({ projectId });
+        const candidateId = initialScan.candidates[0]!.candidateId;
+        const initialCommit = yield* harness.service.commit({
+          projectId,
+          candidateIds: [candidateId],
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+        expect(initialCommit.results[0]?.status).toBe("imported");
+        expect(harness.commands).toHaveLength(1);
+        expect(harness.bindings).toHaveLength(1);
+
+        const handedOffSelection = {
+          instanceId: handedOffInstanceId,
+          model: "gpt-5.6-luna",
+        };
+        harness.setImportedModelSelection(handedOffSelection);
+        harness.bindings[0] = {
+          ...harness.bindings[0]!,
+          providerInstanceId: handedOffInstanceId,
+          resumeCursor: { threadId: sourceCandidate().externalThreadId },
+          runtimePayload: {
+            modelSelection: handedOffSelection,
+          },
+        };
+
+        const postHandoffScan = yield* harness.service.scan({ projectId });
+        expect(postHandoffScan.candidates[0]).toMatchObject({
+          candidateId,
+          alreadyImported: true,
+          canResume: true,
+        });
+        expect(postHandoffScan.candidates[0]?.warnings.join(" ")).not.toContain("needs repair");
+
+        const postHandoffCommit = yield* harness.service.commit({
+          projectId,
+          candidateIds: [candidateId],
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+        expect(postHandoffCommit.results[0]?.status).toBe("already-imported");
+        expect(harness.commands).toHaveLength(1);
+        expect(harness.bindings).toHaveLength(1);
+        expect(harness.bindings[0]?.providerInstanceId).toBe(handedOffInstanceId);
+      }),
+  );
+
+  it.effect(
     "prefers the project's configured Codex instance when several accounts share one history store",
     () =>
       Effect.gen(function* () {

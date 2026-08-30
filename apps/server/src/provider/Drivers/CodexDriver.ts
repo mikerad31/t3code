@@ -170,6 +170,9 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         config: effectiveConfig,
         environment: processEnv,
         spawner,
+        // A1/A2/A3 share persisted history even when their auth lives in separate
+        // shadow homes. Read history from the canonical store, never an auth overlay.
+        historyHomePath: homeLayout.sharedHomePath,
       });
 
       // Build a managed snapshot whose settings never change — mutations come
