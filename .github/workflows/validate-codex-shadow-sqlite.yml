@@ -1,0 +1,181 @@
+name: Validate Codex shadow SQLite families
+
+on:
+  push:
+    branches:
+      - fix/codex-shadow-home-sqlite-families
+
+permissions:
+  contents: write
+
+jobs:
+  validate-ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply SQLite family hardening
+        run: |
+          python .github/scripts/patch-codex-shadow-sqlite.py
+          python .github/scripts/patch-codex-shadow-sqlite-followup.py
+
+      - name: Format product slice
+        run: |
+          vp fmt \
+            apps/server/src/provider/Drivers/CodexHomeLayout.ts \
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            apps/server/src/provider/Drivers/CodexDriver.ts \
+            --write
+
+      - name: Exact product working surface
+        run: |
+          mapfile -t actual < <(git diff --name-only | sort)
+          expected=(
+            apps/server/src/provider/Drivers/CodexDriver.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.ts
+          )
+          printf '%s\n' "${actual[@]}"
+          test "${#actual[@]}" -eq "${#expected[@]}"
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${actual[@]}")
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused Codex home tests
+        run: |
+          vp test run \
+            apps/server/src/provider/Drivers/CodexHomeLayout.test.ts \
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+
+      - name: Server typecheck
+        run: vp run --filter t3 typecheck
+
+      - name: Full server suite
+        run: vp run --filter t3 test
+
+      - name: Monorepo typecheck
+        run: vpr typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check
+          mapfile -t actual < <(git diff --name-only | sort)
+          expected=(
+            apps/server/src/provider/Drivers/CodexDriver.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.ts
+          )
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${actual[@]}")
+
+      - name: Package exact validated product tree
+        run: |
+          tar -czf "$RUNNER_TEMP/validated-product.tgz" \
+            apps/server/src/provider/Drivers/CodexDriver.ts \
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts \
+            apps/server/src/provider/Drivers/CodexHomeLayout.ts
+
+      - name: Upload validated product tree
+        uses: actions/upload-artifact@v7
+        with:
+          name: validated-product
+          path: ${{ runner.temp }}/validated-product.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  validate-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Apply SQLite family hardening
+        shell: pwsh
+        run: |
+          python .github/scripts/patch-codex-shadow-sqlite.py
+          python .github/scripts/patch-codex-shadow-sqlite-followup.py
+          vp fmt apps/server/src/provider/Drivers/CodexHomeLayout.ts apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts apps/server/src/provider/Drivers/CodexDriver.ts --write
+
+      - name: Windows SQLite WAL and SHM routing regression
+        shell: pwsh
+        run: vp test run apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts -t "routes SQLite families directly to the shared home"
+
+      - name: Windows server typecheck
+        shell: pwsh
+        run: vp run --filter t3 typecheck
+
+  commit-validated-tree:
+    needs:
+      - validate-ubuntu
+      - validate-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Download validated product tree
+        uses: actions/download-artifact@v8
+        with:
+          name: validated-product
+          path: ${{ runner.temp }}/validated-product
+
+      - name: Commit exact validated product tree
+        run: |
+          tar -xzf "$RUNNER_TEMP/validated-product/validated-product.tgz" -C .
+          rm .github/workflows/validate-codex-shadow-sqlite.yml
+          rm .github/scripts/patch-codex-shadow-sqlite.py
+          rm .github/scripts/patch-codex-shadow-sqlite-followup.py
+
+          git diff --check
+          git config user.name "T3 validation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+
+          mapfile -t final < <(git diff --cached --name-only ac408e922a7ab0ac5b2d6ddad01dd167a2527ccf | sort)
+          expected=(
+            apps/server/src/provider/Drivers/CodexDriver.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.sidecar.test.ts
+            apps/server/src/provider/Drivers/CodexHomeLayout.ts
+          )
+          printf '%s\n' "${final[@]}"
+          test "${#final[@]}" -eq "${#expected[@]}"
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${final[@]}")
+
+          git commit -m "fix(codex): keep SQLite families out of auth overlays"
+          git push origin HEAD:fix/codex-shadow-home-sqlite-families
