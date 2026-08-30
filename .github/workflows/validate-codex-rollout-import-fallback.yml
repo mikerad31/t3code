@@ -1,0 +1,55 @@
+name: Validate Codex rollout import fallback
+
+on:
+  push:
+    branches:
+      - fix/codex-rollout-import-fallback
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Exact product surface
+        run: |
+          mapfile -t files < <(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -v '^.github/workflows/validate-codex-rollout-import-fallback.yml$' | sort)
+          expected=(
+            apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts
+            apps/server/src/provider/Layers/CodexRolloutTranscript.ts
+            apps/server/src/provider/Layers/CodexThreadImport.ts
+          )
+          printf '%s\n' "${files[@]}"
+          test "${#files[@]}" -eq "${#expected[@]}"
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(printf '%s\n' "${files[@]}")
+
+      - name: Repo conformance
+        run: vp check
+
+      - name: Focused rollout fallback tests
+        run: vp test run apps/server/src/provider/Layers/CodexRolloutTranscript.test.ts
+
+      - name: Full server suite
+        run: vp run --filter t3 test
+
+      - name: Monorepo typecheck
+        run: vpr typecheck
+
+      - name: Diff sanity
+        run: |
+          git diff --check de480af8fa248640ea5ea61398c46163f14eacd2...HEAD
+          test -z "$(git diff --name-only de480af8fa248640ea5ea61398c46163f14eacd2...HEAD | grep -E '^(.github/workflows/(?!validate-codex-rollout-import-fallback.yml)|package.json|pnpm-lock.yaml)' || true)"
