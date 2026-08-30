@@ -28,6 +28,15 @@ const MAX_IMPORT_MESSAGES = 2_000;
 const THREAD_LIST_PAGE_SIZE = 100;
 const INTERACTIVE_SOURCE_KINDS = ["cli", "vscode", "appServer"] as const;
 
+function causeDetail(cause: unknown): string | undefined {
+  if (cause instanceof Error && cause.message.trim().length > 0) return cause.message.trim();
+  if (typeof cause === "object" && cause !== null && "message" in cause) {
+    const message = cause.message;
+    if (typeof message === "string" && message.trim().length > 0) return message.trim();
+  }
+  return undefined;
+}
+
 function normalizePath(path: string, platform: NodeJS.Platform): string {
   const resolved = NodePath.normalize(NodePath.resolve(path));
   return platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -129,10 +138,14 @@ export function makeCodexThreadImport(input: {
   readonly config: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  /** Canonical persisted history home; distinct from per-account auth overlays. */
+  readonly historyHomePath?: string;
 }): ProviderThreadImportShape {
-  const resolvedHomePath = input.config.homePath
-    ? expandHomePath(input.config.homePath)
-    : undefined;
+  const resolvedHomePath = input.historyHomePath
+    ? expandHomePath(input.historyHomePath)
+    : input.config.homePath
+      ? expandHomePath(input.config.homePath)
+      : undefined;
   const launchArgs = resolveCodexLaunchArgs(input.config.launchArgs, input.environment);
   const environment = {
     ...input.environment,
@@ -173,7 +186,12 @@ export function makeCodexThreadImport(input: {
           ? cause
           : new ProviderThreadImportError({
               operation: importOperation,
-              detail: `Codex app-server thread ${importOperation} failed.`,
+              detail: (() => {
+                const detail = causeDetail(cause);
+                return detail === undefined
+                  ? `Codex app-server thread ${importOperation} failed.`
+                  : `Codex app-server thread ${importOperation} failed: ${detail}`;
+              })(),
               cause,
             }),
       ),

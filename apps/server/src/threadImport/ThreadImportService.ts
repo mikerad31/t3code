@@ -166,13 +166,21 @@ function hasMatchingCodexResumeBinding(
   binding: ProviderRuntimeBinding | undefined,
   input: {
     readonly providerInstanceId: ProviderInstanceId;
+    readonly continuationKey: string;
     readonly externalThreadId: string;
+    readonly instances: ReadonlyArray<ProviderInstance>;
   },
 ): boolean {
+  const boundInstance = input.instances.find(
+    (instance) => instance.instanceId === input.providerInstanceId,
+  );
   return (
     binding?.provider === CODEX_DRIVER &&
     binding.providerInstanceId === input.providerInstanceId &&
-    codexResumeThreadId(binding.resumeCursor) === input.externalThreadId
+    codexResumeThreadId(binding.resumeCursor) === input.externalThreadId &&
+    boundInstance?.driverKind === CODEX_DRIVER &&
+    boundInstance.enabled &&
+    boundInstance.continuationIdentity.continuationKey === input.continuationKey
   );
 }
 
@@ -218,8 +226,9 @@ export const makeThreadImportService = (input: {
 
   const scanCandidates = (project: OrchestrationProjectShell) =>
     Effect.gen(function* () {
+      const allInstances = yield* providerInstances.listInstances;
       const instances = canonicalCodexInstances(
-        yield* providerInstances.listInstances,
+        allInstances,
         project.defaultModelSelection?.instanceId,
       );
       if (instances.length === 0) {
@@ -265,10 +274,12 @@ export const makeThreadImportService = (input: {
             : undefined;
           const nativeResumeReady =
             !transcriptAlreadyImported ||
-            (persistedThread?.modelSelection.instanceId === instance.instanceId &&
+            (persistedThread !== undefined &&
               hasMatchingCodexResumeBinding(persistedBinding, {
-                providerInstanceId: instance.instanceId,
+                providerInstanceId: persistedThread.modelSelection.instanceId,
+                continuationKey,
                 externalThreadId: source.externalThreadId,
+                instances: allInstances,
               }));
           const repairWarnings =
             transcriptAlreadyImported && !nativeResumeReady
@@ -320,6 +331,7 @@ export const makeThreadImportService = (input: {
     Effect.gen(function* () {
       const project = yield* readProject(request.projectId);
       const scanned = yield* scanCandidates(project);
+      const allInstances = yield* providerInstances.listInstances;
       const byId = new Map(scanned.map((entry) => [String(entry.candidate.candidateId), entry]));
       const importedIds = yield* existingThreadIds();
       const results: ThreadImportItemResult[] = [];
@@ -352,10 +364,12 @@ export const makeThreadImportService = (input: {
             Effect.orElseSucceed(() => undefined),
           );
           if (
-            existingThread?.modelSelection.instanceId === source.instance.instanceId &&
+            existingThread !== undefined &&
             hasMatchingCodexResumeBinding(persistedBinding, {
-              providerInstanceId: source.instance.instanceId,
+              providerInstanceId: existingThread.modelSelection.instanceId,
+              continuationKey: source.continuationKey,
               externalThreadId: source.candidate.externalThreadId,
+              instances: allInstances,
             })
           ) {
             results.push({
