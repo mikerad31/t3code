@@ -1014,6 +1014,8 @@ const ThreadImportCommand = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   messages: Schema.Array(ThreadImportCommandMessage),
+  // Historical imports can arrive settled without transiently entering the active inbox.
+  settled: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

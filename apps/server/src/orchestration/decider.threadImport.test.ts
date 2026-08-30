@@ -94,4 +94,81 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
         });
       }),
   );
+
+  it.effect(
+    "materializes an archived historical import directly settled with historical timestamps",
+    () =>
+      Effect.gen(function* () {
+        const projectId = ProjectId.make("project-thread-import-settled");
+        const threadId = ThreadId.make("thread-thread-import-settled");
+        const readModel: OrchestrationReadModel = {
+          snapshotSequence: 0,
+          projects: [
+            {
+              id: projectId,
+              title: "Imported project",
+              workspaceRoot: "/workspace/imported",
+              defaultModelSelection: null,
+              defaultThreadEnvMode: null,
+              faviconPath: null,
+              scripts: [],
+              createdAt: CREATED_AT,
+              updatedAt: CREATED_AT,
+              deletedAt: null,
+            },
+          ],
+          threads: [],
+          updatedAt: CREATED_AT,
+        };
+
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.import",
+            commandId: CommandId.make("cmd-thread-import-settled"),
+            threadId,
+            projectId,
+            title: "Archived historical Codex chat",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex-account"),
+              model: "gpt-5.6-codex",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            messages: [
+              {
+                id: MessageId.make("archived-historical-user-message"),
+                role: "user",
+                text: "Archived historical user message",
+                createdAt: MESSAGE_AT,
+              },
+            ],
+            settled: true,
+            createdAt: CREATED_AT,
+            updatedAt: UPDATED_AT,
+          },
+          readModel,
+        });
+        const events = Array.isArray(result) ? result : [result];
+        expect(events.map((event) => event.type)).toEqual([
+          "thread.created",
+          "thread.message-sent",
+          "thread.meta-updated",
+          "thread.settled",
+        ]);
+
+        let projected = readModel;
+        let sequence = 0;
+        for (const event of events) {
+          sequence += 1;
+          projected = yield* projectEvent(projected, { ...event, sequence });
+        }
+        expect(projected.threads[0]).toMatchObject({
+          id: threadId,
+          settledOverride: "settled",
+          settledAt: UPDATED_AT,
+          createdAt: CREATED_AT,
+          updatedAt: UPDATED_AT,
+        });
+      }),
+  );
 });
