@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as CodexClient from "effect-codex-app-server/client";
+import type * as CodexErrors from "effect-codex-app-server/errors";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -261,7 +262,10 @@ export function makeCodexThreadImport(input: {
     projectRoot: string,
     externalThreadId: string,
     archived: boolean,
-  ): Effect.Effect<ProviderThreadImportTranscript, unknown> => {
+  ): Effect.Effect<
+    ProviderThreadImportTranscript,
+    ProviderThreadImportError | CodexErrors.CodexAppServerError
+  > => {
     if (!resolvedHomePath) {
       return Effect.fail(
         new ProviderThreadImportError({
