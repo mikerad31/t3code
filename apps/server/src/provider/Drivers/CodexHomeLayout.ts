@@ -32,13 +32,22 @@ const KNOWN_SHARED_DIRECTORIES = [
 const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "models_cache.json"]);
 const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "tmp"]);
 const REPLACEABLE_SHARED_RUNTIME_DIRECTORIES = new Set(["mcp-oauth-locks"]);
-const REPLACEABLE_SHARED_RUNTIME_FILE_SUFFIXES = [".sqlite-shm", ".sqlite-wal"] as const;
+const SQLITE_DATABASE_SUFFIXES = [".sqlite", ".sqlite3", ".db", ".db3"] as const;
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 function isReplaceableSharedRuntimeEntry(entryName: string): boolean {
-  return (
-    REPLACEABLE_SHARED_RUNTIME_DIRECTORIES.has(entryName) ||
-    REPLACEABLE_SHARED_RUNTIME_FILE_SUFFIXES.some((suffix) => entryName.endsWith(suffix))
-  );
+  return REPLACEABLE_SHARED_RUNTIME_DIRECTORIES.has(entryName);
+}
+
+function isTopLevelSqliteFamilyEntry(entryName: string): boolean {
+  let databaseName = entryName.toLowerCase();
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    if (databaseName.endsWith(suffix)) {
+      databaseName = databaseName.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return SQLITE_DATABASE_SUFFIXES.some((suffix) => databaseName.endsWith(suffix));
 }
 
 function resolveHomePath(path: Path.Path, value: string | undefined): string {
@@ -72,6 +81,23 @@ export const resolveCodexHomeLayout = Effect.fn("resolveCodexHomeLayout")(functi
     continuationKey: `codex:home:${sharedHomePath}`,
   };
 });
+
+/**
+ * Keep per-account authentication in CODEX_HOME while routing every SQLite
+ * database family through one canonical directory. SQLite derives WAL/SHM
+ * filenames from the database pathname it opens, so file-level DB symlinks can
+ * otherwise split one family across the shared and shadow homes.
+ */
+export function codexHomeProcessEnvironment(
+  layout: CodexHomeLayout,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (layout.mode !== "authOverlay") return environment;
+  return {
+    ...environment,
+    CODEX_SQLITE_HOME: layout.sharedHomePath,
+  };
+}
 
 const CodexShadowHomeContext = {
   sharedHomePath: Schema.String,
@@ -219,6 +245,41 @@ const removePrivateSymlink = Effect.fn("CodexHomeLayout.removePrivateSymlink")(f
       }),
     );
   }
+});
+
+const retireLegacySharedSqliteSymlink = Effect.fn(
+  "CodexHomeLayout.retireLegacySharedSqliteSymlink",
+)(function* (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly sharedHomePath: string;
+  readonly effectiveHomePath: string;
+  readonly entryName: string;
+}): Effect.fn.Return<void, CodexShadowHomeError, Path.Path> {
+  const path = yield* Path.Path;
+  const shadowPath = path.join(input.effectiveHomePath, input.entryName);
+  const expectedTarget = path.join(input.sharedHomePath, input.entryName);
+  const state = yield* readLinkState({
+    ...input,
+    linkPath: shadowPath,
+  });
+  if (state._tag !== "Symlink") return;
+
+  const resolvedExisting = path.resolve(path.dirname(shadowPath), state.target);
+  if (resolvedExisting !== expectedTarget) return;
+
+  yield* input.fileSystem.remove(shadowPath).pipe(
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        new CodexShadowHomeFileSystemError({
+          sharedHomePath: input.sharedHomePath,
+          effectiveHomePath: input.effectiveHomePath,
+          operation: "remove",
+          path: shadowPath,
+          entryName: input.entryName,
+          cause,
+        }),
+    }),
+  );
 });
 
 const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (input: {
@@ -378,9 +439,41 @@ export const materializeCodexShadowHome = Effect.fn("materializeCodexShadowHome"
         }),
     }),
   );
+  const shadowEntryNames = yield* fileSystem.readDirectory(effectiveHomePath).pipe(
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        new CodexShadowHomeFileSystemError({
+          sharedHomePath: layout.sharedHomePath,
+          effectiveHomePath,
+          operation: "readDirectory",
+          path: effectiveHomePath,
+          cause,
+        }),
+    }),
+  );
+
+  const sqliteFamilyEntries = new Set(
+    [...sharedEntryNames, ...shadowEntryNames].filter(isTopLevelSqliteFamilyEntry),
+  );
+  yield* Effect.forEach(
+    sqliteFamilyEntries,
+    (entryName) =>
+      retireLegacySharedSqliteSymlink({
+        fileSystem,
+        sharedHomePath: layout.sharedHomePath,
+        effectiveHomePath,
+        entryName,
+      }),
+    { discard: true },
+  );
+
   const entries = new Set<string>(KNOWN_SHARED_DIRECTORIES);
   for (const entryName of sharedEntryNames) {
-    if (!PRIVATE_ENTRY_NAMES.has(entryName) && !SHADOW_LOCAL_ENTRY_NAMES.has(entryName)) {
+    if (
+      !PRIVATE_ENTRY_NAMES.has(entryName) &&
+      !SHADOW_LOCAL_ENTRY_NAMES.has(entryName) &&
+      !isTopLevelSqliteFamilyEntry(entryName)
+    ) {
       entries.add(entryName);
     }
   }
