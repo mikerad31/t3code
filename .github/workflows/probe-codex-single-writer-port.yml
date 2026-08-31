@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - audit/codex-reliability-hardening-20260831
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
