@@ -1,0 +1,36 @@
+name: Probe Codex single-writer hardening
+
+on:
+  push:
+    branches:
+      - audit/codex-reliability-hardening-20260831
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Probe upstream PR 8580 patch
+        shell: bash
+        run: |
+          set -uo pipefail
+          curl -fsSL https://github.com/pingdotgg/t3code/pull/8580.patch -o /tmp/pr8580.patch
+          set +e
+          git apply --3way --index /tmp/pr8580.patch
+          rc=$?
+          set -e
+          echo "apply_rc=$rc"
+          echo "=== status ==="
+          git status --short
+          echo "=== unmerged ==="
+          git diff --name-only --diff-filter=U || true
+          echo "=== staged stat ==="
+          git diff --cached --stat || true
+          echo "=== conflict markers ==="
+          git grep -n '^<<<<<<<\|^=======\|^>>>>>>>' -- apps/server/src || true
+          exit $rc
