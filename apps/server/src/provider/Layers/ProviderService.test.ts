@@ -75,6 +75,10 @@ const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make
 const asEventId = (value: string): EventId => EventId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+const readRuntimePayloadField = (payload: unknown, field: string): unknown =>
+  payload !== null && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)[field]
+    : undefined;
 const codexInstanceId = ProviderInstanceId.make("codex");
 const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const cursorInstanceId = ProviderInstanceId.make("cursor");
@@ -696,6 +700,168 @@ it.effect("stops the compatible Codex source before starting the target", () => 
     const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
     assert.equal(binding?.providerInstanceId, harness.targetInstanceId);
     assert.deepEqual(binding?.resumeCursor, { threadId: `native-${threadId}` });
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("makes a completed Codex source eligible for an exact-id handoff", () => {
+  const harness = makeCompatibleCodexSwitchHarness();
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService.ProviderService;
+    const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+    const threadId = asThreadId("thread-codex-completed-turn-handoff");
+    const nativeThreadId = `native-${threadId}`;
+    const sourceSession = yield* startCodexSwitchSource({
+      provider,
+      threadId,
+      sourceInstanceId: harness.sourceInstanceId,
+    });
+    assert.deepEqual(sourceSession.resumeCursor, { threadId: nativeThreadId });
+    assert.deepEqual(harness.source.startSession.mock.calls[0]?.[0]?.resumeCursor, {
+      threadId: nativeThreadId,
+    });
+
+    const turn = yield* provider.sendTurn({
+      threadId,
+      input: "complete before switching accounts",
+      attachments: [],
+    });
+    harness.source.updateSession(threadId, (session) => ({
+      ...session,
+      status: "running",
+      activeTurnId: turn.turnId,
+    }));
+    harness.source.stopSession.mockClear();
+    harness.target.startSession.mockClear();
+
+    const activeFailure = yield* Effect.flip(
+      switchCodexTarget({
+        provider,
+        threadId,
+        targetInstanceId: harness.targetInstanceId,
+      }),
+    );
+    assert.instanceOf(activeFailure, ProviderValidationError);
+    assert.include(activeFailure.issue, "must be idle before switching");
+    assert.equal(harness.source.stopSession.mock.calls.length, 0);
+    assert.equal(harness.target.startSession.mock.calls.length, 0);
+
+    harness.source.updateSession(threadId, (session) => ({
+      ...session,
+      status: "ready",
+      activeTurnId: undefined,
+    }));
+    const staleBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(staleBinding?.providerInstanceId, harness.sourceInstanceId);
+    assert.equal(
+      readRuntimePayloadField(staleBinding?.runtimePayload, "activeTurnId"),
+      turn.turnId,
+    );
+
+    const publishedStaleCompletion = yield* Stream.runHead(provider.streamEvents).pipe(
+      Effect.forkChild,
+    );
+    yield* Effect.yieldNow;
+    harness.source.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-codex-stale-turn-completion"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:00.500Z",
+      threadId,
+      turnId: asTurnId("turn-before-active-turn"),
+      payload: { state: "completed" },
+    });
+    yield* Fiber.join(publishedStaleCompletion);
+    const stillActiveBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(
+      readRuntimePayloadField(stillActiveBinding?.runtimePayload, "activeTurnId"),
+      turn.turnId,
+    );
+
+    const publishedCompletion = yield* Stream.runHead(provider.streamEvents).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    harness.source.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-codex-completed-turn-handoff"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId,
+      turnId: turn.turnId,
+      payload: { state: "completed" },
+    });
+    const published = yield* Fiber.join(publishedCompletion);
+    assert.isTrue(Option.isSome(published));
+
+    const idleBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(idleBinding?.providerInstanceId, harness.sourceInstanceId);
+    assert.equal(idleBinding?.status, "running");
+    assert.equal(readRuntimePayloadField(idleBinding?.runtimePayload, "activeTurnId"), null);
+    assert.equal(
+      readRuntimePayloadField(idleBinding?.runtimePayload, "lastRuntimeEvent"),
+      "turn.completed",
+    );
+
+    const sourceStopEntered = yield* Deferred.make<void>();
+    const releaseSource = yield* Deferred.make<void>();
+    const originalStop = harness.source.stopSession.getMockImplementation();
+    assert.exists(originalStop);
+    harness.source.stopSession.mockImplementation((stoppedThreadId) =>
+      Deferred.succeed(sourceStopEntered, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseSource)),
+        Effect.andThen(originalStop(stoppedThreadId)),
+      ),
+    );
+
+    const switchFiber = yield* Effect.forkChild(
+      switchCodexTarget({
+        provider,
+        threadId,
+        targetInstanceId: harness.targetInstanceId,
+      }),
+    );
+    yield* Deferred.await(sourceStopEntered);
+    assert.equal(harness.target.startSession.mock.calls.length, 0);
+    assert.isTrue(yield* harness.source.hasSession(threadId));
+
+    yield* Deferred.succeed(releaseSource, undefined);
+    const targetSession = yield* Fiber.join(switchFiber);
+
+    assert.deepEqual(harness.source.stopSession.mock.calls, [[threadId]]);
+    assert.equal(harness.target.startSession.mock.calls.length, 1);
+    assert.deepEqual(harness.target.startSession.mock.calls[0]?.[0]?.resumeCursor, {
+      threadId: nativeThreadId,
+    });
+    assert.deepEqual(targetSession.resumeCursor, { threadId: nativeThreadId });
+    assert.isFalse(yield* harness.source.hasSession(threadId));
+    assert.isTrue(yield* harness.target.hasSession(threadId));
+    const targetBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(targetBinding?.providerInstanceId, harness.targetInstanceId);
+    assert.deepEqual(targetBinding?.resumeCursor, { threadId: nativeThreadId });
+
+    const targetTurn = yield* provider.sendTurn({
+      threadId,
+      input: "keep target ownership after a delayed source event",
+      attachments: [],
+    });
+    const publishedDelayedSourceCompletion = yield* Stream.runHead(provider.streamEvents).pipe(
+      Effect.forkChild,
+    );
+    yield* Effect.yieldNow;
+    harness.source.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-codex-delayed-source-completion"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId,
+      turnId: targetTurn.turnId,
+      payload: { state: "completed" },
+    });
+    yield* Fiber.join(publishedDelayedSourceCompletion);
+    const protectedTargetBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(protectedTargetBinding?.providerInstanceId, harness.targetInstanceId);
+    assert.equal(
+      readRuntimePayloadField(protectedTargetBinding?.runtimePayload, "activeTurnId"),
+      targetTurn.turnId,
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 

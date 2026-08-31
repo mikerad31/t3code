@@ -426,6 +426,58 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
     });
 
+  const reconcileTerminalTurn = Effect.fn("reconcileTerminalTurn")(function* (
+    source: {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+    },
+    event: ProviderRuntimeEvent,
+  ) {
+    if (
+      (event.type !== "turn.completed" && event.type !== "turn.aborted") ||
+      event.turnId === undefined
+    ) {
+      return;
+    }
+
+    yield* withThreadLock(
+      event.threadId,
+      Effect.gen(function* () {
+        const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+        if (
+          binding === undefined ||
+          binding.provider !== source.provider ||
+          binding.providerInstanceId !== source.instanceId ||
+          readPersistedActiveTurnId(binding.runtimePayload) !== event.turnId
+        ) {
+          return;
+        }
+
+        yield* directory.upsert({
+          threadId: event.threadId,
+          provider: source.provider,
+          providerInstanceId: source.instanceId,
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: event.type,
+            lastRuntimeEventAt: event.createdAt,
+          },
+        });
+      }),
+    ).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("provider.session.runtime-reconciliation-failed", {
+          threadId: event.threadId,
+          provider: source.provider,
+          providerInstanceId: source.instanceId,
+          eventType: event.type,
+          turnId: event.turnId,
+          cause,
+        }),
+      ),
+    );
+  });
+
   const processRuntimeEvent = (
     source: {
       readonly instanceId: ProviderInstanceId;
@@ -438,7 +490,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        }).pipe(
+          Effect.andThen(reconcileTerminalTurn(source, canonicalEvent)),
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+        ),
       ),
     );
 
