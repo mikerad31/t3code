@@ -148,6 +148,74 @@ it.layer(NodeServices.layer)("CodexHomeLayout sqlite family safety", (it) => {
     }),
   );
 
+  it.effect("shares native Codex thread writer locks through the canonical home", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sharedHome = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-codex-shared-",
+      });
+      const shadowRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-codex-shadow-root-",
+      });
+      const shadowHome = path.join(shadowRoot, "shadow");
+      yield* fileSystem.makeDirectory(shadowHome, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(shadowHome, "auth.json"), '{"shadow":true}\\n');
+
+      const layout = yield* resolveCodexHomeLayout(
+        decodeCodexSettings({
+          homePath: sharedHome,
+          shadowHomePath: shadowHome,
+        }),
+      );
+      yield* materializeCodexShadowHome(layout);
+
+      const sharedWriterLocks = path.join(sharedHome, "thread-writer-locks");
+      const shadowWriterLocks = path.join(shadowHome, "thread-writer-locks");
+
+      expect(yield* fileSystem.exists(sharedWriterLocks)).toBe(true);
+
+      const linkTarget = yield* fileSystem.readLink(shadowWriterLocks);
+      expect(path.resolve(path.dirname(shadowWriterLocks), linkTarget)).toBe(sharedWriterLocks);
+    }),
+  );
+
+  it.effect("refuses to replace an ordinary shadow native writer-lock directory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sharedHome = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-codex-shared-",
+      });
+      const shadowRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-codex-shadow-root-",
+      });
+      const shadowHome = path.join(shadowRoot, "shadow");
+      const shadowWriterLocks = path.join(shadowHome, "thread-writer-locks");
+      const sentinel = path.join(shadowWriterLocks, "legacy.lock");
+
+      yield* fileSystem.makeDirectory(shadowWriterLocks, { recursive: true });
+      yield* fileSystem.writeFileString(path.join(shadowHome, "auth.json"), '{"shadow":true}\\n');
+      yield* fileSystem.writeFileString(sentinel, "preserve-native-lock\\n");
+
+      const layout = yield* resolveCodexHomeLayout(
+        decodeCodexSettings({
+          homePath: sharedHome,
+          shadowHomePath: shadowHome,
+        }),
+      );
+
+      const error = yield* materializeCodexShadowHome(layout).pipe(Effect.flip);
+
+      expect(error._tag).toBe("CodexShadowHomeEntryConflictError");
+      if (error._tag === "CodexShadowHomeEntryConflictError") {
+        expect(error.entryName).toBe("thread-writer-locks");
+      }
+
+      expect(yield* fileSystem.readFileString(sentinel)).toBe("preserve-native-lock\\n");
+    }),
+  );
+
   it.effect("does not override SQLite routing for a direct Codex home", () =>
     Effect.gen(function* () {
       const sharedHome = yield* FileSystem.FileSystem.pipe(
