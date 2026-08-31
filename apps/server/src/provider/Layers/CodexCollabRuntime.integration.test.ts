@@ -110,24 +110,49 @@ describe("CodexSessionRuntime collab integration", () => {
         binaryPath: peerPath,
         cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
+        resumeCursor: { threadId: ROOT },
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
-      const queuedCloseEvents: Array<ProviderEvent> = [];
-      const queuedCloseEventsFiber = yield* runtime.events.pipe(
-        Stream.filter((event) => event.method === "session/closed"),
+      const queuedEvents: Array<ProviderEvent> = [];
+      const readyEvent = yield* Deferred.make<ProviderEvent>();
+      const queuedEventsFiber = yield* runtime.events.pipe(
         Stream.runForEach((event) =>
           Effect.sync(() => {
-            queuedCloseEvents.push(event);
-          }),
+            queuedEvents.push(event);
+          }).pipe(
+            Effect.andThen(
+              event.method === "session/ready"
+                ? Deferred.succeed(readyEvent, event).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
+          ),
         ),
         Effect.forkScoped,
       );
 
       yield* runtime.start();
+      const observedReadyEvent = yield* Deferred.await(readyEvent);
       const returnedCloseEvent = yield* runtime.close;
-      yield* Fiber.await(queuedCloseEventsFiber);
+      yield* Fiber.await(queuedEventsFiber);
 
       assert.equal(returnedCloseEvent.method, "session/closed");
+      const readyPayload = observedReadyEvent.payload as
+        | {
+            processId?: number;
+            requestedNativeThreadId?: string | null;
+            nativeThreadId?: string;
+          }
+        | undefined;
+      const closedPayload = returnedCloseEvent.payload as
+        | { processId?: number; nativeThreadId?: string | null; writerReleased?: boolean }
+        | undefined;
+      assert.isAbove(readyPayload?.processId ?? 0, 0);
+      assert.equal(readyPayload?.requestedNativeThreadId, ROOT);
+      assert.equal(readyPayload?.nativeThreadId, ROOT);
+      assert.equal(closedPayload?.processId, readyPayload?.processId);
+      assert.equal(closedPayload?.nativeThreadId, ROOT);
+      assert.equal(closedPayload?.writerReleased, true);
+      const queuedCloseEvents = queuedEvents.filter((event) => event.method === "session/closed");
       assert.deepEqual(queuedCloseEvents, []);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

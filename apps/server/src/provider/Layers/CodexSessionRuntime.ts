@@ -1304,19 +1304,21 @@ export const makeCodexSessionRuntime = (
         yield* offerEvent(providerEvent);
         return providerEvent;
       });
-    const makeSessionEvent = (method: string, message: string) =>
+    const makeSessionEvent = (method: string, message: string, payload?: unknown) =>
       makeEvent({
         kind: "session",
         threadId: options.threadId,
         method,
         message,
+        ...(payload !== undefined ? { payload } : {}),
       });
-    const emitSessionEvent = (method: string, message: string) =>
+    const emitSessionEvent = (method: string, message: string, payload?: unknown) =>
       emitEvent({
         kind: "session",
         threadId: options.threadId,
         method,
         message,
+        ...(payload !== undefined ? { payload } : {}),
       });
 
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
@@ -2150,7 +2152,11 @@ export const makeCodexSessionRuntime = (
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
-      yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
+      yield* emitSessionEvent("session/ready", "Codex App Server session ready.", {
+        processId: Number(child.pid),
+        requestedNativeThreadId: readResumeCursorThreadId(options.resumeCursor) ?? null,
+        nativeThreadId: providerThreadId,
+      });
       return session;
     });
 
@@ -2180,7 +2186,12 @@ export const makeCodexSessionRuntime = (
       // The adapter publishes the event returned by close after it has stopped
       // the runtime event consumer. Keeping this event off the runtime queue
       // prevents a normal stop from publishing the same lifecycle event twice.
-      const closedEvent = yield* makeSessionEvent("session/closed", "Session stopped");
+      const closedSession = yield* Ref.get(sessionRef);
+      const closedEvent = yield* makeSessionEvent("session/closed", "Session stopped", {
+        processId: Number(child.pid),
+        nativeThreadId: currentProviderThreadId(closedSession) ?? null,
+        writerReleased: true,
+      });
       yield* Queue.shutdown(serverNotifications);
       yield* Queue.shutdown(events);
       return closedEvent;
