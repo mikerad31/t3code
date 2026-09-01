@@ -23,6 +23,7 @@ import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
+  readonly appVersion?: string;
   readonly checkForUpdates?: Effect.Effect<
     void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
@@ -38,6 +39,7 @@ const flushCallbacks = Effect.yieldNow;
 
 function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
+  let allowPrerelease = false;
   let allowDowngrade = false;
   let fullChangelog = false;
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
@@ -69,7 +71,10 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setAutoDownload: () => Effect.void,
     setAutoInstallOnAppQuit: () => Effect.void,
     setChannel: () => Effect.void,
-    setAllowPrerelease: () => Effect.void,
+    setAllowPrerelease: (value) =>
+      Effect.sync(() => {
+        allowPrerelease = value;
+      }),
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
@@ -135,7 +140,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
     platform: "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",
@@ -210,6 +215,8 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   return {
     layer,
+    allowDowngrade: () => allowDowngrade,
+    allowPrerelease: () => allowPrerelease,
     checkCount: () => checkCount,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
@@ -228,6 +235,60 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 }
 
 describe("DesktopUpdates", () => {
+  it("accepts only the Hardened GitHub update feed", () => {
+    assert.isTrue(
+      DesktopUpdates.isAllowedDesktopUpdateFeed({
+        provider: "github",
+        owner: "mikerad31",
+        repo: "t3code",
+        updaterCacheDirName: "t3code-hardened-updater",
+      }),
+    );
+    assert.isFalse(
+      DesktopUpdates.isAllowedDesktopUpdateFeed({
+        provider: "github",
+        owner: "pingdotgg",
+        repo: "t3code",
+        updaterCacheDirName: "t3code-updater",
+      }),
+    );
+    assert.isFalse(
+      DesktopUpdates.isAllowedDesktopUpdateFeed({
+        provider: "generic",
+        url: "https://example.invalid/updates",
+      }),
+    );
+    assert.isFalse(
+      DesktopUpdates.isAllowedDesktopUpdateFeed({
+        provider: "github",
+        owner: "mikerad31",
+        repo: "t3code",
+        updaterCacheDirName: "t3code-updater",
+      }),
+    );
+  });
+
+  it.effect("allows Hardened prereleases without enabling downgrade behavior", () => {
+    const harness = makeHarness({ appVersion: "0.0.37-hardened.1" });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        assert.isTrue(harness.allowPrerelease());
+        assert.isFalse(harness.allowDowngrade());
+        assert.isFalse(harness.fullChangelog());
+
+        harness.emit("update-available", { version: "0.0.37-hardened.2" });
+        yield* flushCallbacks;
+        const state = yield* updates.getState;
+        assert.equal(state.status, "available");
+        assert.equal(state.availableVersion, "0.0.37-hardened.2");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

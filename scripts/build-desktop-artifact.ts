@@ -17,6 +17,7 @@ import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -52,7 +53,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_APP_ID = DESKTOP_DISTRIBUTION.appId;
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2045,31 +2046,14 @@ export function resolveDesktopRuntimeDependencies(
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
 }
 
-export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
-  updateChannel: "latest" | "nightly",
-) {
-  const env = yield* Config.all({
-    updateRepository: Config.string("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
-    githubRepository: Config.string("GITHUB_REPOSITORY").pipe(Config.option),
-  });
-  const rawRepo = (
-    Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
-  ).trim();
-  if (!rawRepo) return undefined;
-
-  const [owner, repo, ...rest] = rawRepo.split("/");
-  if (!owner || !repo || rest.length > 0) return undefined;
-
+export function resolveGitHubPublishConfig(updateChannel: "latest" | "nightly") {
   return {
-    provider: "github",
-    owner,
-    repo,
+    provider: "github" as const,
+    ...DESKTOP_DISTRIBUTION.updateRepository,
     releaseType: updateChannel === "nightly" ? "prerelease" : "release",
     ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
   };
-});
+}
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
@@ -2116,10 +2100,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(version: string): string {
-  return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+export function resolveDesktopProductName(_version: string): string {
+  return desktopPackageJson.productName ?? DESKTOP_DISTRIBUTION.productName;
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2143,7 +2125,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: "T3-Code-Hardened-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS, ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : [])],
     directories: {
@@ -2161,16 +2143,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-    if (publishConfig) {
-      buildConfig.publish = [publishConfig];
-    } else if (mockUpdates) {
+    if (mockUpdates) {
       buildConfig.publish = [
         {
           provider: "generic",
           url: resolveMockUpdateServerUrl(mockUpdateServerPort),
         },
       ];
+    } else {
+      buildConfig.publish = [resolveGitHubPublishConfig(updateChannel)];
     }
   }
 
@@ -3175,7 +3156,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: DESKTOP_DISTRIBUTION.packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,

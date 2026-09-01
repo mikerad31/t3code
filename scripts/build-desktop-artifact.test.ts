@@ -249,9 +249,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
   });
 
-  it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+  it("keeps the Hardened product identity across update channels", () => {
+    assert.equal(resolveDesktopProductName("0.0.17-hardened.1"), "T3 Code Hardened");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code Hardened");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -273,46 +273,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
 
-  it.effect("resolves GitHub desktop publish config from Effect config", () =>
-    Effect.gen(function* () {
-      const latestConfig = yield* resolveGitHubPublishConfig("latest").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
-      );
-      const nightlyConfig = yield* resolveGitHubPublishConfig("nightly").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                GITHUB_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
-      );
+  it("pins GitHub desktop publishing to the Hardened release repository", () => {
+    const latestConfig = resolveGitHubPublishConfig("latest");
+    const nightlyConfig = resolveGitHubPublishConfig("nightly");
 
-      assert.deepStrictEqual(latestConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "release",
-      });
-      assert.deepStrictEqual(nightlyConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "prerelease",
-        channel: "nightly",
-      });
-    }),
-  );
+    assert.deepStrictEqual(latestConfig, {
+      provider: "github",
+      owner: "mikerad31",
+      repo: "t3code",
+      releaseType: "release",
+    });
+    assert.deepStrictEqual(nightlyConfig, {
+      provider: "github",
+      owner: "mikerad31",
+      repo: "t3code",
+      releaseType: "prerelease",
+      channel: "nightly",
+    });
+  });
 
   it.effect("omits update feeds for pull request preview builds", () =>
     Effect.gen(function* () {
@@ -334,14 +312,29 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
         undefined,
       );
+      const mock = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.0.33-hardened.1",
+        false,
+        true,
+        4242,
+        undefined,
+      );
 
       assert.notProperty(preview, "publish");
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
-          owner: "pingdotgg",
+          owner: "mikerad31",
           repo: "t3code",
           releaseType: "release",
+        },
+      ]);
+      assert.deepStrictEqual(mock.publish, [
+        {
+          provider: "generic",
+          url: "http://localhost:4242",
         },
       ]);
     }).pipe(
@@ -622,6 +615,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
+      assert.equal(win.appId, "com.mikerad31.t3code.hardened");
+      assert.equal(win.productName, "T3 Code Hardened");
+      assert.equal(win.artifactName, "T3-Code-Hardened-${version}-${arch}.${ext}");
       // Native binaries and helper executables cannot load from inside an
       // asar; everything else stays packed. The Claude SDK platform packages
       // and .bin shims never ship.
@@ -636,7 +632,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/node_modules/.bin/**",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Alpha) 1.2.3 Installer",
+        title: "T3 Code Hardened 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 540, height: 412 },
         contents: [
@@ -1277,7 +1273,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.mikerad31.t3code.hardened",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1297,7 +1293,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.mikerad31.t3code.hardened</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -1392,7 +1388,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.mikerad31.t3code.hardened");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);

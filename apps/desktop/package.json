@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/desktop",
-  "version": "0.0.37",
+  "version": "0.0.37-hardened.1",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.cjs",
@@ -36,5 +36,5 @@
     "tailwindcss": "^4.0.0",
     "vite-plus": "catalog:"
   },
-  "productName": "T3 Code (Alpha)"
+  "productName": "T3 Code Hardened"
 }

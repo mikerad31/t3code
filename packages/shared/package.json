@@ -7,6 +7,10 @@
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"
     },
+    "./desktopDistribution": {
+      "types": "./src/desktopDistribution.ts",
+      "import": "./src/desktopDistribution.ts"
+    },
     "./themePreview": {
       "types": "./src/themePreview.ts",
       "import": "./src/themePreview.ts"

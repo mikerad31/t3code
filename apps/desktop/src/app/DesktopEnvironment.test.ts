@@ -1,8 +1,8 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -26,7 +26,7 @@ const makeEnvironmentLayer = (
   DesktopEnvironment.layer({
     ...defaultInput,
     ...overrides,
-  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(env))));
+  }).pipe(Layer.provide(Layer.mergeAll(Path.layer, DesktopConfig.layerTest(env))));
 
 const makeEnvironment = (
   overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
@@ -96,6 +96,11 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
       assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
+      assert.equal(environment.displayName, "T3 Code Hardened");
+      assert.equal(environment.userDataDirName, "t3code-hardened");
+      assert.equal(environment.appUserModelId, "com.mikerad31.t3code.hardened");
+      assert.equal(environment.linuxDesktopEntryName, "t3code-hardened.desktop");
+      assert.equal(environment.linuxWmClass, "t3code-hardened");
     }),
   );
 

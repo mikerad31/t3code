@@ -20,6 +20,7 @@ import * as Scope from "effect/Scope";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+import { DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
@@ -28,7 +29,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
-import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
+import { isHardenedDesktopVersion, resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -170,6 +171,15 @@ const {
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
 
+export function isAllowedDesktopUpdateFeed(config: Readonly<Record<string, string>>): boolean {
+  return (
+    config.provider === "github" &&
+    config.owner === DESKTOP_DISTRIBUTION.updateRepository.owner &&
+    config.repo === DESKTOP_DISTRIBUTION.updateRepository.repo &&
+    config.updaterCacheDirName === `${DESKTOP_DISTRIBUTION.packageName}-updater`
+  );
+}
+
 function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
   for (const line of raw.split("\n")) {
@@ -180,7 +190,9 @@ function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYm
   }
 
   return decodeAppUpdateYmlConfig(entries).pipe(
-    Effect.map((config) => (config.provider ? Option.some(config) : Option.none())),
+    Effect.map((config) =>
+      config.provider && isAllowedDesktopUpdateFeed(config) ? Option.some(config) : Option.none(),
+    ),
     Effect.orElseSucceed(() => Option.none<AppUpdateYmlConfig>()),
   );
 }
@@ -335,16 +347,18 @@ export const make = Effect.gen(function* () {
     channel: DesktopUpdateChannel,
   ) {
     yield* Effect.annotateCurrentSpan({ channel });
-    const allowsPrerelease = channel === "nightly";
+    const allowsPrerelease =
+      channel === "nightly" || isHardenedDesktopVersion(environment.appVersion);
+    const allowsDowngrade = channel === "nightly";
     yield* electronUpdater.setChannel(channel);
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
-    yield* electronUpdater.setAllowDowngrade(allowsPrerelease);
-    yield* electronUpdater.setFullChangelog(allowsPrerelease);
+    yield* electronUpdater.setAllowDowngrade(allowsDowngrade);
+    yield* electronUpdater.setFullChangelog(allowsDowngrade);
     yield* logUpdaterInfo("using update channel", {
       channel,
       allowPrerelease: allowsPrerelease,
-      allowDowngrade: allowsPrerelease,
-      fullChangelog: allowsPrerelease,
+      allowDowngrade: allowsDowngrade,
+      fullChangelog: allowsDowngrade,
     });
   });
 
