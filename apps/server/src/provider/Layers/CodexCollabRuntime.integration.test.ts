@@ -411,6 +411,91 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.live("Stop aborts a held turn and preserves the native thread for the next turn", () =>
+    Effect.gen(function* () {
+      const interruptedTurnId = "019fe3f7-f52f-7b92-b5c7-25f574eb9d1d";
+      const recoveryTurnId = "019fe3f8-4fa4-7971-8e6e-37f1147cfd88";
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        completeTurnOnInterrupt: true,
+        turnIds: [interruptedTurnId, recoveryTurnId],
+        expectedActiveTurnId: interruptedTurnId,
+        notifications: [],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-interrupt-recovery"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: ROOT },
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const interruptedCompletion = yield* Deferred.make<ProviderEvent>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) =>
+          event.method === "turn/completed" && event.turnId === interruptedTurnId
+            ? Deferred.succeed(interruptedCompletion, event).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+
+      const started = yield* runtime.start();
+      assert.deepEqual(started.resumeCursor, { threadId: ROOT });
+      const firstTurn = yield* runtime.sendTurn({ input: "hold this turn open" });
+      assert.equal(firstTurn.turnId, interruptedTurnId);
+      assert.deepEqual(firstTurn.resumeCursor, { threadId: ROOT });
+
+      const promptCompletion = yield* runtime
+        .interruptTurn()
+        .pipe(
+          Effect.andThen(Deferred.await(interruptedCompletion)),
+          Effect.timeoutOption("5 seconds"),
+        );
+      if (promptCompletion._tag === "None") {
+        assert.fail("held Codex turn did not abort within 5 seconds after Stop");
+        return;
+      }
+      const completion = promptCompletion.value;
+      assert.equal(
+        (completion.payload as { turn?: { status?: string } }).turn?.status,
+        "interrupted",
+      );
+      const interruptedSession = yield* runtime.getSession;
+      assert.equal(interruptedSession.status, "ready");
+      assert.isUndefined(interruptedSession.activeTurnId);
+      assert.deepEqual(interruptedSession.resumeCursor, { threadId: ROOT });
+
+      const interrupts = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { threadId?: string; turnId?: string });
+      assert.deepEqual(interrupts, [{ threadId: ROOT, turnId: interruptedTurnId }]);
+
+      const recoveryTurn = yield* runtime.sendTurn({ input: "continue on the same thread" });
+      assert.equal(recoveryTurn.turnId, recoveryTurnId);
+      assert.deepEqual(recoveryTurn.resumeCursor, { threadId: ROOT });
+      const recoveredSession = yield* runtime.getSession;
+      assert.equal(recoveredSession.status, "running");
+      assert.equal(recoveredSession.activeTurnId, recoveryTurnId);
+      assert.deepEqual(recoveredSession.resumeCursor, { threadId: ROOT });
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   const elicitationCases = [
     {
       decision: "accept",

@@ -178,7 +178,9 @@ export function createThreadEnvironmentAtoms<R, E>(
       label: "environment-data:commands:thread:interrupt-turn",
       execute: (input: InterruptThreadTurnInput) => interruptThreadTurn(input),
       scheduler,
-      concurrency,
+      // Stop must bypass the active turn's command lane so a blocked send or
+      // tool execution cannot delay its interrupt RPC.
+      concurrency: { mode: "parallel" },
     }),
     respondToApproval: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:respond-to-approval",

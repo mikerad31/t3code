@@ -128,6 +128,18 @@ rl.on("line", (line) => {
       return;
     }
     write({ id, result: {} });
+    if (script.completeTurnOnInterrupt && target === script.rootThreadId && activeTurn) {
+      const interruptedTurn = { ...activeTurn, status: "interrupted" };
+      activeTurn = undefined;
+      write({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: {
+          threadId: script.rootThreadId,
+          turn: interruptedTurn,
+        },
+      });
+    }
     return;
   }
   if (id !== undefined) {
