@@ -131,10 +131,12 @@ import {
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  getVisibleThreadsForProject,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   nextCollapsedProjectSectionKeys,
+  nextProjectThreadVisibleLimit,
   orderItemsByPreferredIds,
   planPinnedReorder,
   reduceSidebarProjectScopeMenuState,
@@ -148,6 +150,7 @@ import {
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
+  SIDEBAR_PROJECT_THREAD_PAGE_SIZE,
   useThreadJumpHintVisibility,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -217,6 +220,11 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 const COLLAPSED_PROJECT_SECTIONS_KEY = "t3code:sidebar-v2:collapsed-project-sections";
 const COLLAPSED_PROJECT_SECTIONS_SCHEMA = Schema.Array(Schema.String);
+
+interface SidebarProjectThreadRow {
+  thread: EnvironmentThreadShell;
+  section: "pinned" | "active" | "snoozed" | "settled";
+}
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -739,6 +747,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  showProjectIdentity: boolean;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
@@ -1164,12 +1173,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onBlur={handleRenameBlur}
       onClick={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
+      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-[13px] font-medium text-card-foreground outline-none focus:border-foreground"
     />
   ) : (
     <span
       className={cn(
-        "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
+        "min-w-0 flex-1 text-[13px] transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
         variant === "card"
           ? cn(
@@ -1257,12 +1266,29 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       />
     )
   ) : null;
+  const compactStatusIndicator = topStatus ? (
+    <span
+      role="status"
+      aria-label={topStatus.label}
+      className={cn("inline-flex size-4 shrink-0 items-center justify-center", topStatus.className)}
+    >
+      {topStatus.icon === "working" ? (
+        <CircleDashedIcon aria-hidden className="size-3.5" />
+      ) : topStatus.icon === "done" ? (
+        <CircleCheckIcon aria-hidden className="size-3.5" />
+      ) : topStatus.icon === "woke" ? (
+        <AlarmClockIcon aria-hidden className="size-3.5" />
+      ) : (
+        <CircleAlertIcon aria-hidden className="size-3" />
+      )}
+    </span>
+  ) : null;
 
   if (variant === "slim") {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_32px]"
       >
         <Tooltip>
           <TooltipTrigger
@@ -1272,7 +1298,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 tabIndex={0}
                 data-testid="sidebar-row-slim"
                 aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                className={cn(rowSurfaceClassName, "flex h-8 items-center gap-2 px-2")}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1282,23 +1308,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           >
             {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
-            <span
-              className={cn(
-                "shrink-0 transition-opacity",
-                !props.isActive &&
-                  "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-              )}
-            >
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                faviconPath={props.projectFaviconPath}
-                className="size-4"
-                fallbackIcon={MessageSquareIcon}
-              />
-            </span>
+            {props.showProjectIdentity ? (
+              <span
+                className={cn(
+                  "shrink-0 transition-opacity",
+                  !props.isActive &&
+                    "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                )}
+              >
+                <ProjectFavicon
+                  environmentId={thread.environmentId}
+                  cwd={props.projectCwd ?? ""}
+                  faviconPath={props.projectFaviconPath}
+                  className="size-4"
+                  fallbackIcon={MessageSquareIcon}
+                />
+              </span>
+            ) : null}
             {title}
-            {driverKind && showProviderIdentity ? (
+            {compactStatusIndicator}
+            {driverKind && (showProviderIdentity || !props.showProjectIdentity) ? (
               <span
                 role="img"
                 aria-label={`Provider ${providerIdentityLabel}`}
@@ -1308,7 +1337,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   driverKind={driverKind}
                   displayName={providerIdentityLabel}
                   accentColor={providerEntry?.accentColor}
-                  showBadge
+                  showBadge={showInstanceBadge}
                   iconClassName="size-3.5 opacity-60"
                   badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
                 />
@@ -1792,7 +1821,6 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 function SidebarProjectSectionHeader(props: {
   project: SidebarProjectSnapshot;
   expanded: boolean;
-  threadCount: number;
   onToggle: () => void;
   onCreateThread: (event: ReactMouseEvent<HTMLElement>) => void;
   onImportConversations: (event: ReactMouseEvent<HTMLElement>) => void;
@@ -1826,14 +1854,6 @@ function SidebarProjectSectionHeader(props: {
         />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-sidebar-muted-foreground group-hover/project-section:text-sidebar-foreground">
           {props.project.displayName}
-        </span>
-        {props.project.groupedProjectCount > 1 ? (
-          <span className="shrink-0 text-[10px] text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
-            {props.project.groupedProjectCount} roots
-          </span>
-        ) : null}
-        <span className="min-w-4 shrink-0 text-right text-[10px] tabular-nums text-sidebar-muted-foreground/45 group-hover/project-section:opacity-0 group-focus-within/project-section:opacity-0 max-sm:hidden">
-          {props.threadCount}
         </span>
       </button>
       <div
@@ -2185,13 +2205,6 @@ export default function Sidebar() {
     () => new Set(collapsedProjectSectionKeys),
     [collapsedProjectSectionKeys],
   );
-  useEffect(() => {
-    const validProjectKeys = new Set(projectGroups.map((project) => project.projectKey));
-    setCollapsedProjectSectionKeys((current) => {
-      const next = current.filter((projectKey) => validProjectKeys.has(projectKey));
-      return next.length === current.length ? current : next;
-    });
-  }, [projectGroups, setCollapsedProjectSectionKeys]);
   const toggleProjectSection = useCallback(
     (projectKey: string) => {
       setCollapsedProjectSectionKeys((current) =>
@@ -2202,6 +2215,26 @@ export default function Sidebar() {
     },
     [setCollapsedProjectSectionKeys],
   );
+  const [projectThreadVisibleLimits, setProjectThreadVisibleLimits] = useState<
+    Record<string, number>
+  >({});
+  const showMoreProjectThreads = useCallback((projectKey: string, threadCount: number) => {
+    setProjectThreadVisibleLimits((current) => ({
+      ...current,
+      [projectKey]: nextProjectThreadVisibleLimit({
+        action: "more",
+        currentLimit: current[projectKey] ?? SIDEBAR_PROJECT_THREAD_PAGE_SIZE,
+        threadCount,
+      }),
+    }));
+  }, []);
+  const showLessProjectThreads = useCallback((projectKey: string) => {
+    setProjectThreadVisibleLimits((current) => {
+      const next = { ...current };
+      delete next[projectKey];
+      return next;
+    });
+  }, []);
   const projectSectionKeys = useMemo(
     () => projectGroups.map((project) => project.projectKey),
     [projectGroups],
@@ -2373,6 +2406,78 @@ export default function Sidebar() {
     };
   }, [nowMinute, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
 
+  // Drag-to-reorder for the pinned block. A drop computes ONE fractional key
+  // for the moved thread and sends it to that thread's own server (see
+  // planPinnedReorder for the keyless-neighbor materialization case, which
+  // instead rewrites every key in the section). The optimistic order keeps
+  // the card where it was dropped until EVERY key the drop wrote is
+  // reflected in canonical state — a section rewrite is several sequential
+  // writes, and releasing on the first landed key would expose the
+  // half-written canonical order, reshuffling the block once per write.
+  // A failed write clears the override (the card snaps back) with a toast.
+  // A key we did NOT write landing (a concurrent client's reorder that must
+  // win) and ANY membership change (new pin, unpin, snooze/wake) also
+  // release it: the override can't say where members it never saw belong,
+  // and holding it would launder a stale order into later drags.
+  const pinnedDndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
+  const [optimisticPinnedOrder, setOptimisticPinnedOrder] = useState<{
+    readonly order: readonly string[];
+    /** pinOrderKey per thread as of the drop — the baseline that tells a
+        concurrent client's write apart from one of our own landing. */
+    readonly keysAtDrop: ReadonlyMap<string, string | null>;
+    /** The keys this drop writes (one per planned assignment). The
+        override holds until all of them appear in canonical state. */
+    readonly assignedKeys: ReadonlyMap<string, string>;
+  } | null>(null);
+  const orderedPinnedThreads = useMemo(() => {
+    if (optimisticPinnedOrder === null) return pinnedThreads;
+    return orderItemsByPreferredIds({
+      items: pinnedThreads,
+      preferredIds: optimisticPinnedOrder.order,
+      getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    });
+  }, [optimisticPinnedOrder, pinnedThreads]);
+  useEffect(() => {
+    if (optimisticPinnedOrder === null) return;
+    const canonical = pinnedThreads.filter((thread) =>
+      reorderablePinnedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+    );
+    const canonicalKeys = canonical.map((thread) =>
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    );
+    // The override represents one drop against one snapshot of the world.
+    // Release it when the world moves on: membership changed (pin/unpin/
+    // snooze/wake — the override can't say where members it never saw
+    // belong), a key changed to something we did NOT write (a concurrent
+    // client's reorder that must win), every key we wrote has landed, or
+    // canonical already matches. Releasing on the FIRST landed key instead
+    // of the last exposes the half-written order mid-materialization and
+    // the block visibly reshuffles once per write.
+    const membershipChanged =
+      canonicalKeys.length !== optimisticPinnedOrder.order.length ||
+      canonicalKeys.some((key) => !optimisticPinnedOrder.order.includes(key));
+    const foreignKeyLanded = canonical.some((thread, index) => {
+      const threadKey = canonicalKeys[index]!;
+      const currentKey = thread.pinOrderKey ?? null;
+      if (currentKey === optimisticPinnedOrder.keysAtDrop.get(threadKey)) return false;
+      return currentKey !== optimisticPinnedOrder.assignedKeys.get(threadKey);
+    });
+    const currentKeyByThreadKey = new Map(
+      canonical.map((thread, index) => [canonicalKeys[index]!, thread.pinOrderKey ?? null]),
+    );
+    const allAssignmentsLanded = [...optimisticPinnedOrder.assignedKeys].every(
+      ([threadKey, orderKey]) => currentKeyByThreadKey.get(threadKey) === orderKey,
+    );
+    const orderConfirmed =
+      !membershipChanged &&
+      canonicalKeys.every((key, index) => key === optimisticPinnedOrder.order[index]);
+    if (membershipChanged || foreignKeyLanded || allAssignmentsLanded || orderConfirmed) {
+      setOptimisticPinnedOrder(null);
+    }
+  }, [optimisticPinnedOrder, pinnedThreads, reorderablePinnedKeys]);
+
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
@@ -2500,12 +2605,48 @@ export default function Sidebar() {
     () =>
       buildSidebarProjectThreadSections({
         projects: projectGroups,
-        pinnedThreads,
+        pinnedThreads: orderedPinnedThreads,
         activeThreads,
         snoozedThreads,
         settledThreads,
       }),
-    [activeThreads, pinnedThreads, projectGroups, settledThreads, snoozedThreads],
+    [activeThreads, orderedPinnedThreads, projectGroups, settledThreads, snoozedThreads],
+  );
+  const projectThreadViews = useMemo(
+    () =>
+      projectThreadSections.map((section) => {
+        const rows: SidebarProjectThreadRow[] = [
+          ...section.pinnedThreads.map((thread) => ({ thread, section: "pinned" as const })),
+          ...section.activeThreads.map((thread) => ({ thread, section: "active" as const })),
+          ...section.snoozedThreads.map((thread) => ({ thread, section: "snoozed" as const })),
+          ...section.settledThreads.map((thread) => ({ thread, section: "settled" as const })),
+        ];
+        const projectKey = section.project.projectKey;
+        const isExpanded = !collapsedProjectSectionKeySet.has(projectKey);
+        const visibleLimit =
+          projectThreadVisibleLimits[projectKey] ?? SIDEBAR_PROJECT_THREAD_PAGE_SIZE;
+        const window = getVisibleThreadsForProject({
+          threads: rows,
+          selectedThreadKey: routeThreadKey,
+          isProjectExpanded: isExpanded,
+          visibleLimit,
+          getThreadKey: ({ thread }) =>
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        });
+        return {
+          section,
+          isExpanded,
+          visibleLimit,
+          threadCount: rows.length,
+          ...window,
+        };
+      }),
+    [
+      collapsedProjectSectionKeySet,
+      projectThreadSections,
+      projectThreadVisibleLimits,
+      routeThreadKey,
+    ],
   );
   const visibleSnoozedThreadKeySet = useMemo(
     () =>
@@ -2527,35 +2668,8 @@ export default function Sidebar() {
   );
   const groupedVisibleThreads = useMemo(() => {
     const visibleThreads: EnvironmentThreadShell[] = [];
-    for (const section of projectThreadSections) {
-      const visibleSnoozed = section.snoozedThreads.filter((thread) =>
-        visibleSnoozedThreadKeySet.has(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
-      );
-      const visibleSettled = section.settledThreads.filter((thread) =>
-        renderedSettledThreadKeySet.has(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
-      );
-      const sectionThreads = [
-        ...section.pinnedThreads,
-        ...section.activeThreads,
-        ...visibleSnoozed,
-        ...visibleSettled,
-      ];
-      const routeKeepsSectionExpanded =
-        routeThreadKey !== null &&
-        sectionThreads.some(
-          (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-        );
-      if (
-        !collapsedProjectSectionKeySet.has(section.project.projectKey) ||
-        routeKeepsSectionExpanded
-      ) {
-        visibleThreads.push(...sectionThreads);
-      }
+    for (const view of projectThreadViews) {
+      visibleThreads.push(...view.visibleThreads.map(({ thread }) => thread));
     }
     visibleThreads.push(
       ...ungroupedThreads.pinnedThreads,
@@ -2573,10 +2687,8 @@ export default function Sidebar() {
     );
     return visibleThreads;
   }, [
-    collapsedProjectSectionKeySet,
-    projectThreadSections,
+    projectThreadViews,
     renderedSettledThreadKeySet,
-    routeThreadKey,
     ungroupedThreads,
     visibleSnoozedThreadKeySet,
   ]);
@@ -2910,77 +3022,6 @@ export default function Sidebar() {
     },
     [unsnoozeThread],
   );
-  // Drag-to-reorder for the pinned block. A drop computes ONE fractional key
-  // for the moved thread and sends it to that thread's own server (see
-  // planPinnedReorder for the keyless-neighbor materialization case, which
-  // instead rewrites every key in the section). The optimistic order keeps
-  // the card where it was dropped until EVERY key the drop wrote is
-  // reflected in canonical state — a section rewrite is several sequential
-  // writes, and releasing on the first landed key would expose the
-  // half-written canonical order, reshuffling the block once per write.
-  // A failed write clears the override (the card snaps back) with a toast.
-  // A key we did NOT write landing (a concurrent client's reorder that must
-  // win) and ANY membership change (new pin, unpin, snooze/wake) also
-  // release it: the override can't say where members it never saw belong,
-  // and holding it would launder a stale order into later drags.
-  const pinnedDndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-  );
-  const [optimisticPinnedOrder, setOptimisticPinnedOrder] = useState<{
-    readonly order: readonly string[];
-    /** pinOrderKey per thread as of the drop — the baseline that tells a
-        concurrent client's write apart from one of our own landing. */
-    readonly keysAtDrop: ReadonlyMap<string, string | null>;
-    /** The keys this drop writes (one per planned assignment). The
-        override holds until all of them appear in canonical state. */
-    readonly assignedKeys: ReadonlyMap<string, string>;
-  } | null>(null);
-  const orderedPinnedThreads = useMemo(() => {
-    if (optimisticPinnedOrder === null) return pinnedThreads;
-    return orderItemsByPreferredIds({
-      items: pinnedThreads,
-      preferredIds: optimisticPinnedOrder.order,
-      getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-    });
-  }, [optimisticPinnedOrder, pinnedThreads]);
-  useEffect(() => {
-    if (optimisticPinnedOrder === null) return;
-    const canonical = pinnedThreads.filter((thread) =>
-      reorderablePinnedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-    );
-    const canonicalKeys = canonical.map((thread) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-    );
-    // The override represents one drop against one snapshot of the world.
-    // Release it when the world moves on: membership changed (pin/unpin/
-    // snooze/wake — the override can't say where members it never saw
-    // belong), a key changed to something we did NOT write (a concurrent
-    // client's reorder that must win), every key we wrote has landed, or
-    // canonical already matches. Releasing on the FIRST landed key instead
-    // of the last exposes the half-written order mid-materialization and
-    // the block visibly reshuffles once per write.
-    const membershipChanged =
-      canonicalKeys.length !== optimisticPinnedOrder.order.length ||
-      canonicalKeys.some((key) => !optimisticPinnedOrder.order.includes(key));
-    const foreignKeyLanded = canonical.some((thread, index) => {
-      const threadKey = canonicalKeys[index]!;
-      const currentKey = thread.pinOrderKey ?? null;
-      if (currentKey === optimisticPinnedOrder.keysAtDrop.get(threadKey)) return false;
-      return currentKey !== optimisticPinnedOrder.assignedKeys.get(threadKey);
-    });
-    const currentKeyByThreadKey = new Map(
-      canonical.map((thread, index) => [canonicalKeys[index]!, thread.pinOrderKey ?? null]),
-    );
-    const allAssignmentsLanded = [...optimisticPinnedOrder.assignedKeys].every(
-      ([threadKey, orderKey]) => currentKeyByThreadKey.get(threadKey) === orderKey,
-    );
-    const orderConfirmed =
-      !membershipChanged &&
-      canonicalKeys.every((key, index) => key === optimisticPinnedOrder.order[index]);
-    if (membershipChanged || foreignKeyLanded || allAssignmentsLanded || orderConfirmed) {
-      setOptimisticPinnedOrder(null);
-    }
-  }, [optimisticPinnedOrder, pinnedThreads, reorderablePinnedKeys]);
   const attemptPin = useCallback(
     (threadRef: ScopedThreadRef) => {
       void (async () => {
@@ -4137,12 +4178,9 @@ export default function Sidebar() {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
-                    // Settled and snoozed are the ONLY things that collapse a
-                    // row: every other thread is a full card. Density comes
-                    // from users (or the auto rules) actually parking work,
-                    // not from the sidebar second-guessing what still matters.
                     const isCard = section === "active" || section === "pinned";
-                    const rowVariant = isCard ? "card" : "slim";
+                    const isCompactProjectRow = scopedProjectGroup === null;
+                    const rowVariant = isCompactProjectRow ? "slim" : isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
                         // Keyed per variant on purpose: when a thread settles,
@@ -4189,6 +4227,7 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
+                        showProjectIdentity={!isCompactProjectRow}
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={
                           showThreadJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
@@ -4250,7 +4289,7 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
-                    pinnedThreads.length > 0 ? (
+                    pinnedThreads.length > 0 && scopedProjectGroup !== null ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
                           sensors={pinnedDndSensors}
@@ -4291,37 +4330,8 @@ export default function Sidebar() {
                     ) : null,
                   ];
                   if (scopedProjectGroup === null) {
-                    for (const section of projectThreadSections) {
-                      const visibleSnoozed = section.snoozedThreads.filter((thread) =>
-                        visibleSnoozedThreadKeySet.has(
-                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                        ),
-                      );
-                      const visibleSettled = section.settledThreads.filter((thread) =>
-                        renderedSettledThreadKeySet.has(
-                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                        ),
-                      );
-                      const threadCount =
-                        section.pinnedThreads.length +
-                        section.activeThreads.length +
-                        section.snoozedThreads.length +
-                        section.settledThreads.length;
-                      const routeKeepsSectionExpanded =
-                        routeThreadKey !== null &&
-                        [
-                          ...section.pinnedThreads,
-                          ...section.activeThreads,
-                          ...visibleSnoozed,
-                          ...visibleSettled,
-                        ].some(
-                          (thread) =>
-                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) ===
-                            routeThreadKey,
-                        );
-                      const sectionExpanded =
-                        routeKeepsSectionExpanded ||
-                        !collapsedProjectSectionKeySet.has(section.project.projectKey);
+                    for (const view of projectThreadViews) {
+                      const { section } = view;
                       items.push(
                         <li
                           key={`project-section:${section.project.projectKey}`}
@@ -4330,8 +4340,7 @@ export default function Sidebar() {
                         >
                           <SidebarProjectSectionHeader
                             project={section.project}
-                            expanded={sectionExpanded}
-                            threadCount={threadCount}
+                            expanded={view.isExpanded}
                             onToggle={() => toggleProjectSection(section.project.projectKey)}
                             onCreateThread={(event) =>
                               handleCreateProjectThread(event, section.project)
@@ -4343,67 +4352,88 @@ export default function Sidebar() {
                               void handleProjectSettings(event, section.project)
                             }
                           />
-                          {sectionExpanded ? (
-                            <ul
-                              role="list"
-                              aria-label={`${section.project.displayName} threads`}
-                              className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/50 pl-1.5"
+                          {view.isExpanded ? (
+                            <DndContext
+                              sensors={pinnedDndSensors}
+                              collisionDetection={closestCenter}
+                              modifiers={[
+                                restrictToVerticalAxis,
+                                restrictToFirstScrollableAncestor,
+                              ]}
+                              onDragEnd={handlePinnedDragEnd}
                             >
-                              {section.pinnedThreads.map((thread) =>
-                                renderThreadRow(thread, "pinned"),
-                              )}
-                              {section.pinnedThreads.length > 0 &&
-                              section.activeThreads.length > 0 ? (
-                                <li
-                                  aria-hidden
-                                  className="mx-2 my-1 h-px list-none bg-sidebar-border/45"
-                                />
-                              ) : null}
-                              {section.activeThreads.map((thread) =>
-                                renderThreadRow(thread, "active"),
-                              )}
-                              {section.snoozedThreads.length > 0 ? (
-                                <li data-thread-selection-safe className="list-none">
-                                  <button
-                                    type="button"
-                                    onClick={toggleSnoozedShelf}
-                                    aria-expanded={snoozedShelfExpanded}
-                                    className="mb-0.5 mt-2 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
-                                  >
-                                    <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                                      {snoozedShelfExpanded
-                                        ? "Snoozed"
-                                        : `Snoozed (${section.snoozedThreads.length})`}
-                                    </span>
-                                    <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
-                                  </button>
-                                </li>
-                              ) : null}
-                              {visibleSnoozed.map((thread) => renderThreadRow(thread, "snoozed"))}
-                              {section.settledThreads.length > 0 ? (
-                                <li data-thread-selection-safe className="list-none">
-                                  <button
-                                    type="button"
-                                    onClick={toggleSettledShelf}
-                                    aria-expanded={settledShelfExpanded}
-                                    className="mb-0.5 mt-2 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
-                                  >
-                                    <span className="text-[11px] font-medium text-muted-foreground/50">
-                                      {settledShelfExpanded
-                                        ? "Settled"
-                                        : `Settled (${section.settledThreads.length})`}
-                                    </span>
-                                    <span className="h-px flex-1 bg-sidebar-border/60" />
-                                  </button>
-                                </li>
-                              ) : null}
-                              {visibleSettled.map((thread) => renderThreadRow(thread, "settled"))}
-                              {threadCount === 0 ? (
-                                <li className="list-none px-2.5 py-2 text-xs text-sidebar-muted-foreground/50">
-                                  No conversations yet
-                                </li>
-                              ) : null}
-                            </ul>
+                              <SortableContext
+                                items={view.visibleThreads
+                                  .filter(({ section }) => section === "pinned")
+                                  .map(({ thread }) =>
+                                    scopedThreadKey(
+                                      scopeThreadRef(thread.environmentId, thread.id),
+                                    ),
+                                  )
+                                  .filter((threadKey) => reorderablePinnedKeys.has(threadKey))}
+                                strategy={verticalListSortingStrategy}
+                              >
+                                <ul
+                                  role="list"
+                                  aria-label={`${section.project.displayName} threads`}
+                                  className="ml-2.5 flex flex-col gap-px border-l border-sidebar-border/50 pl-1.5"
+                                >
+                                  {view.visibleThreads.map(({ thread, section: threadSection }) => {
+                                    const threadKey = scopedThreadKey(
+                                      scopeThreadRef(thread.environmentId, thread.id),
+                                    );
+                                    if (
+                                      threadSection !== "pinned" ||
+                                      !reorderablePinnedKeys.has(threadKey)
+                                    ) {
+                                      return renderThreadRow(thread, threadSection);
+                                    }
+                                    return (
+                                      <SortablePinnedThreadRow key={threadKey} id={threadKey}>
+                                        {(bag) => renderThreadRow(thread, threadSection, bag)}
+                                      </SortablePinnedThreadRow>
+                                    );
+                                  })}
+                                  {view.hasHiddenThreads ? (
+                                    <li className="list-none">
+                                      <button
+                                        type="button"
+                                        data-testid={`sidebar-project-show-more:${section.project.projectKey}`}
+                                        onClick={() =>
+                                          showMoreProjectThreads(
+                                            section.project.projectKey,
+                                            view.threadCount,
+                                          )
+                                        }
+                                        className="flex h-8 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                                      >
+                                        Show more
+                                      </button>
+                                    </li>
+                                  ) : null}
+                                  {view.visibleLimit > SIDEBAR_PROJECT_THREAD_PAGE_SIZE &&
+                                  view.threadCount > SIDEBAR_PROJECT_THREAD_PAGE_SIZE ? (
+                                    <li className="list-none">
+                                      <button
+                                        type="button"
+                                        data-testid={`sidebar-project-show-less:${section.project.projectKey}`}
+                                        onClick={() =>
+                                          showLessProjectThreads(section.project.projectKey)
+                                        }
+                                        className="flex h-8 w-full cursor-pointer items-center rounded-md px-2 text-left text-xs font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                                      >
+                                        Show less
+                                      </button>
+                                    </li>
+                                  ) : null}
+                                  {view.threadCount === 0 ? (
+                                    <li className="list-none px-2 py-1.5 text-xs text-sidebar-muted-foreground/50">
+                                      No conversations yet
+                                    </li>
+                                  ) : null}
+                                </ul>
+                              </SortableContext>
+                            </DndContext>
                           ) : null}
                         </li>,
                       );

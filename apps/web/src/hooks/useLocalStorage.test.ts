@@ -32,6 +32,19 @@ afterEach(() => {
 });
 
 describe("local storage errors", () => {
+  it("restores persisted sidebar project collapse keys after a module reload", async () => {
+    const storage = createStorage();
+    const key = "t3code:sidebar-v2:collapsed-project-sections";
+    const schema = Schema.Array(Schema.String);
+    const firstLoad = await loadWithStorage(storage);
+
+    firstLoad.setLocalStorageItem(key, ["project-a", "project-b"], schema);
+    vi.resetModules();
+
+    const secondLoad = await loadWithStorage(storage);
+    expect(secondLoad.getLocalStorageItem(key, schema)).toEqual(["project-a", "project-b"]);
+  });
+
   it("preserves read failure context", async () => {
     const cause = new Error("storage unavailable");
     const { getLocalStorageItem, LocalStorageOperationError } = await loadWithStorage(

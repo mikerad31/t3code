@@ -896,52 +896,81 @@ export function resolveProjectStatusIndicator(
   return highestPriorityStatus;
 }
 
-export function getVisibleThreadsForProject<T extends Pick<Thread, "id">>(input: {
+export const SIDEBAR_PROJECT_THREAD_PAGE_SIZE = 5;
+
+export function getVisibleThreadsForProject<T>(input: {
   threads: readonly T[];
-  activeThreadId: T["id"] | undefined;
-  isThreadListExpanded: boolean;
-  previewLimit: number;
+  selectedThreadKey: string | null;
+  isProjectExpanded: boolean;
+  visibleLimit: number;
+  getThreadKey: (thread: T) => string;
 }): {
   hasHiddenThreads: boolean;
   visibleThreads: T[];
   hiddenThreads: T[];
 } {
-  const { activeThreadId, isThreadListExpanded, previewLimit, threads } = input;
-  const hasHiddenThreads = threads.length > previewLimit;
+  const { getThreadKey, isProjectExpanded, selectedThreadKey, threads, visibleLimit } = input;
 
-  if (!hasHiddenThreads || isThreadListExpanded) {
+  if (!isProjectExpanded) {
     return {
-      hasHiddenThreads,
+      hasHiddenThreads: threads.length > 0,
+      hiddenThreads: [...threads],
+      visibleThreads: [],
+    };
+  }
+
+  const previewThreads = threads.slice(0, visibleLimit);
+
+  if (previewThreads.length === threads.length) {
+    return {
+      hasHiddenThreads: false,
       hiddenThreads: [],
       visibleThreads: [...threads],
     };
   }
 
-  const previewThreads = threads.slice(0, previewLimit);
-  if (!activeThreadId || previewThreads.some((thread) => thread.id === activeThreadId)) {
+  if (
+    selectedThreadKey === null ||
+    previewThreads.some((thread) => getThreadKey(thread) === selectedThreadKey)
+  ) {
     return {
       hasHiddenThreads: true,
-      hiddenThreads: threads.slice(previewLimit),
+      hiddenThreads: threads.slice(visibleLimit),
       visibleThreads: previewThreads,
     };
   }
 
-  const activeThread = threads.find((thread) => thread.id === activeThreadId);
-  if (!activeThread) {
+  const selectedThread = threads.find((thread) => getThreadKey(thread) === selectedThreadKey);
+  if (!selectedThread) {
     return {
       hasHiddenThreads: true,
-      hiddenThreads: threads.slice(previewLimit),
+      hiddenThreads: threads.slice(visibleLimit),
       visibleThreads: previewThreads,
     };
   }
 
-  const visibleThreadIds = new Set([...previewThreads, activeThread].map((thread) => thread.id));
+  const visibleThreadKeys = new Set(
+    [...previewThreads, selectedThread].map((thread) => getThreadKey(thread)),
+  );
+  const hiddenThreads = threads.filter((thread) => !visibleThreadKeys.has(getThreadKey(thread)));
 
   return {
-    hasHiddenThreads: true,
-    hiddenThreads: threads.filter((thread) => !visibleThreadIds.has(thread.id)),
-    visibleThreads: threads.filter((thread) => visibleThreadIds.has(thread.id)),
+    hasHiddenThreads: hiddenThreads.length > 0,
+    hiddenThreads,
+    visibleThreads: threads.filter((thread) => visibleThreadKeys.has(getThreadKey(thread))),
   };
+}
+
+export function nextProjectThreadVisibleLimit(input: {
+  action: "more" | "less";
+  currentLimit: number;
+  threadCount: number;
+  pageSize?: number;
+}): number {
+  const pageSize = input.pageSize ?? SIDEBAR_PROJECT_THREAD_PAGE_SIZE;
+  return input.action === "less"
+    ? pageSize
+    : Math.min(input.threadCount, input.currentLimit + pageSize);
 }
 
 export function getFallbackThreadIdAfterDelete<
