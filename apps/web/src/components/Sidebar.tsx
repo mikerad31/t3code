@@ -131,6 +131,7 @@ import {
   filterSidebarProjectScopeItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  getSidebarSettledTailHiddenCount,
   getVisibleThreadsForProject,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,
@@ -2551,7 +2552,6 @@ export default function Sidebar() {
     }
     return visible;
   }, [routeThreadKey, settledThreads, settledVisibleCount]);
-  const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
   const showMoreSettled = useCallback(
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
@@ -2612,6 +2612,13 @@ export default function Sidebar() {
       }),
     [activeThreads, orderedPinnedThreads, projectGroups, settledThreads, snoozedThreads],
   );
+  const hiddenSettledCount = getSidebarSettledTailHiddenCount({
+    allSettledThreads: settledThreads,
+    visibleSettledThreads,
+    ungroupedSettledThreads: ungroupedThreads.settledThreads,
+    isGroupedProjectMode: scopedProjectGroup === null,
+    getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+  });
   const projectThreadViews = useMemo(
     () =>
       projectThreadSections.map((section) => {

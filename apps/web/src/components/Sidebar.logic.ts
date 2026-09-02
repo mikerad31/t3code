@@ -961,6 +961,29 @@ export function getVisibleThreadsForProject<T>(input: {
   };
 }
 
+/**
+ * The grouped sidebar renders project-owned settled threads through each
+ * project's own page window. Only settled threads that have no project section
+ * still use the legacy global tail; scoped views keep the original global
+ * settled-tail count.
+ */
+export function getSidebarSettledTailHiddenCount<T>(input: {
+  allSettledThreads: readonly T[];
+  visibleSettledThreads: readonly T[];
+  ungroupedSettledThreads: readonly T[];
+  isGroupedProjectMode: boolean;
+  getThreadKey: (thread: T) => string;
+}): number {
+  if (!input.isGroupedProjectMode) {
+    return input.allSettledThreads.length - input.visibleSettledThreads.length;
+  }
+
+  const visibleThreadKeys = new Set(input.visibleSettledThreads.map(input.getThreadKey));
+  return input.ungroupedSettledThreads.filter(
+    (thread) => !visibleThreadKeys.has(input.getThreadKey(thread)),
+  ).length;
+}
+
 export function nextProjectThreadVisibleLimit(input: {
   action: "more" | "less";
   currentLimit: number;
