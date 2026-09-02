@@ -20,6 +20,7 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   nextCollapsedProjectSectionKeys,
+  nextProjectThreadVisibleLimit,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveThreadRowClassName,
@@ -1305,7 +1306,29 @@ describe("resolveProjectStatusIndicator", () => {
 });
 
 describe("getVisibleThreadsForProject", () => {
-  it("includes the active thread even when it falls below the folded preview", () => {
+  const threadKey = (thread: Thread) => String(thread.id);
+
+  it("shows only the first five threads by default", () => {
+    const threads = Array.from({ length: 8 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`thread-${index + 1}`) }),
+    );
+
+    const result = getVisibleThreadsForProject({
+      threads,
+      selectedThreadKey: null,
+      isProjectExpanded: true,
+      visibleLimit: 5,
+      getThreadKey: threadKey,
+    });
+
+    expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
+      threads.slice(0, 5).map((thread) => thread.id),
+    );
+    expect(result.hiddenThreads).toHaveLength(3);
+    expect(result.hasHiddenThreads).toBe(true);
+  });
+
+  it("includes the selected thread when it falls below the folded preview", () => {
     const threads = Array.from({ length: 8 }, (_, index) =>
       makeThread({
         id: ThreadId.make(`thread-${index + 1}`),
@@ -1315,9 +1338,10 @@ describe("getVisibleThreadsForProject", () => {
 
     const result = getVisibleThreadsForProject({
       threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: false,
-      previewLimit: 6,
+      selectedThreadKey: "thread-8",
+      isProjectExpanded: true,
+      visibleLimit: 5,
+      getThreadKey: threadKey,
     });
 
     expect(result.hasHiddenThreads).toBe(true);
@@ -1327,13 +1351,15 @@ describe("getVisibleThreadsForProject", () => {
       ThreadId.make("thread-3"),
       ThreadId.make("thread-4"),
       ThreadId.make("thread-5"),
-      ThreadId.make("thread-6"),
       ThreadId.make("thread-8"),
     ]);
-    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-7")]);
+    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-6"),
+      ThreadId.make("thread-7"),
+    ]);
   });
 
-  it("returns all threads when the list is expanded", () => {
+  it("keeps a selected thread hidden when its project is collapsed", () => {
     const threads = Array.from({ length: 8 }, (_, index) =>
       makeThread({
         id: ThreadId.make(`thread-${index + 1}`),
@@ -1342,16 +1368,48 @@ describe("getVisibleThreadsForProject", () => {
 
     const result = getVisibleThreadsForProject({
       threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: true,
-      previewLimit: 6,
+      selectedThreadKey: "thread-8",
+      isProjectExpanded: false,
+      visibleLimit: 5,
+      getThreadKey: threadKey,
     });
 
     expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
-      threads.map((thread) => thread.id),
+    expect(result.visibleThreads).toEqual([]);
+    expect(result.hiddenThreads).toEqual(threads);
+  });
+
+  it("does not offer Show more when the selected exception makes every thread visible", () => {
+    const threads = Array.from({ length: 6 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`thread-${index + 1}`) }),
     );
+
+    const result = getVisibleThreadsForProject({
+      threads,
+      selectedThreadKey: "thread-6",
+      isProjectExpanded: true,
+      visibleLimit: 5,
+      getThreadKey: threadKey,
+    });
+
+    expect(result.visibleThreads).toEqual(threads);
     expect(result.hiddenThreads).toEqual([]);
+    expect(result.hasHiddenThreads).toBe(false);
+  });
+
+  it("reveals more threads in five-row pages and returns to five on Show less", () => {
+    expect(
+      nextProjectThreadVisibleLimit({ action: "more", currentLimit: 5, threadCount: 18 }),
+    ).toBe(10);
+    expect(
+      nextProjectThreadVisibleLimit({ action: "more", currentLimit: 10, threadCount: 18 }),
+    ).toBe(15);
+    expect(
+      nextProjectThreadVisibleLimit({ action: "more", currentLimit: 15, threadCount: 18 }),
+    ).toBe(18);
+    expect(
+      nextProjectThreadVisibleLimit({ action: "less", currentLimit: 18, threadCount: 18 }),
+    ).toBe(5);
   });
 });
 
