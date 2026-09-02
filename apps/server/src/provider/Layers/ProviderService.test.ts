@@ -882,6 +882,7 @@ it.effect("hands off immediately after terminal live state clears stale persiste
       input: "finish before an immediate account switch",
       attachments: [],
     });
+    const terminalError = "turn completed with a provider usage limit";
 
     // Model the production boundary: Codex has already marked its live
     // session terminal, while ProviderService's subscribed terminal event
@@ -890,8 +891,19 @@ it.effect("hands off immediately after terminal live state clears stale persiste
       ...session,
       status: "error",
       activeTurnId: undefined,
-      lastError: "turn completed with a provider usage limit",
+      lastError: terminalError,
     }));
+    const terminalSession = (yield* harness.source.listSessions()).find(
+      (session) => session.threadId === threadId,
+    );
+    assert.equal(terminalSession?.status, "error");
+    assert.equal(terminalSession?.activeTurnId, undefined);
+    assert.equal(terminalSession?.lastError, terminalError);
+    const staleBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(
+      readRuntimePayloadField(staleBinding?.runtimePayload, "activeTurnId"),
+      turn.turnId,
+    );
     harness.source.emit({
       type: "turn.completed",
       eventId: asEventId("evt-codex-immediate-terminal-handoff"),
@@ -918,6 +930,44 @@ it.effect("hands off immediately after terminal live state clears stale persiste
     assert.equal(binding?.providerInstanceId, harness.targetInstanceId);
     assert.deepEqual(binding?.resumeCursor, { threadId: nativeThreadId });
     assert.equal(readRuntimePayloadField(binding?.runtimePayload, "activeTurnId"), null);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps an error-state Codex session with an active turn protected", () => {
+  const harness = makeCompatibleCodexSwitchHarness();
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService.ProviderService;
+    const threadId = asThreadId("thread-codex-error-with-active-turn");
+    yield* startCodexSwitchSource({
+      provider,
+      threadId,
+      sourceInstanceId: harness.sourceInstanceId,
+    });
+    const turn = yield* provider.sendTurn({
+      threadId,
+      input: "an error notification while the turn is still active",
+      attachments: [],
+    });
+    harness.source.updateSession(threadId, (session) => ({
+      ...session,
+      status: "error",
+      activeTurnId: turn.turnId,
+      lastError: "provider rate limit is still in flight",
+    }));
+    harness.source.stopSession.mockClear();
+    harness.target.startSession.mockClear();
+
+    const failure = yield* Effect.flip(
+      switchCodexTarget({
+        provider,
+        threadId,
+        targetInstanceId: harness.targetInstanceId,
+      }),
+    );
+    assert.instanceOf(failure, ProviderValidationError);
+    assert.include(failure.issue, "must be idle before switching");
+    assert.deepEqual(harness.source.stopSession.mock.calls, []);
+    assert.equal(harness.target.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(harness.layer));
 });
 
