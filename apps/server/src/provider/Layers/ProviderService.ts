@@ -852,12 +852,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 `Codex provider instance '${sourceInstanceId}' retains an ambiguous session for thread '${threadId}'.`,
               );
             }
-            if (
+            // The adapter's live session is authoritative for whether its
+            // writer still owns an in-flight turn. A terminal Codex turn can
+            // update that state before the asynchronously subscribed runtime
+            // event has reconciled the persisted activeTurnId. Treat both
+            // ready and terminal error sessions with no live turn as idle and
+            // clear only that stale projection while holding the thread lock.
+            const sourceSessionIsTerminal =
+              sourceSession?.status === "ready" || sourceSession?.status === "error";
+            const persistedActiveTurnId = readPersistedActiveTurnId(
+              persistedBinding.runtimePayload,
+            );
+            if (sourceSessionIsTerminal && sourceSession.activeTurnId === undefined) {
+              if (persistedActiveTurnId !== undefined && persistedActiveTurnId !== null) {
+                yield* directory.upsert({
+                  threadId,
+                  provider: resolvedProvider,
+                  providerInstanceId: sourceInstanceId,
+                  runtimePayload: {
+                    activeTurnId: null,
+                    lastRuntimeEvent: "codex.handoff.terminal-reconciled",
+                  },
+                });
+              }
+            } else if (
               sourceSession !== undefined &&
-              (sourceSession.status !== "ready" ||
+              (!sourceSessionIsTerminal ||
                 sourceSession.activeTurnId !== undefined ||
-                (readPersistedActiveTurnId(persistedBinding.runtimePayload) !== undefined &&
-                  readPersistedActiveTurnId(persistedBinding.runtimePayload) !== null))
+                (persistedActiveTurnId !== undefined && persistedActiveTurnId !== null))
             ) {
               return yield* toValidationError(
                 "ProviderService.startSession",

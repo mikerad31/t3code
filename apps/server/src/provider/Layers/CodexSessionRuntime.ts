@@ -1989,10 +1989,19 @@ export const makeCodexSessionRuntime = (
             payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
               ? payload.turn.error.message
               : undefined;
-          return updateSession(sessionRef, {
-            status: payload.turn.status === "failed" ? "error" : "ready",
-            activeTurnId: undefined,
-            ...(lastError ? { lastError } : {}),
+          return updateSession(sessionRef, (session) => {
+            // A delayed terminal notification for an older turn must not
+            // clear the newer turn that is already active on this writer.
+            // ProviderService performs the same exact-id check for persisted
+            // reconciliation; keep the live adapter state equally guarded.
+            if (session.activeTurnId !== undefined && session.activeTurnId !== payload.turn.id) {
+              return {};
+            }
+            return {
+              status: payload.turn.status === "failed" ? "error" : "ready",
+              activeTurnId: undefined,
+              ...(lastError ? { lastError } : {}),
+            };
           });
         }),
       ),
