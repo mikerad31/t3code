@@ -15,6 +15,7 @@ import {
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
+  getSidebarSettledTailHiddenCount,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isSidebarNestedLinkClick,
@@ -1410,6 +1411,99 @@ describe("getVisibleThreadsForProject", () => {
     expect(
       nextProjectThreadVisibleLimit({ action: "less", currentLimit: 18, threadCount: 18 }),
     ).toBe(5);
+  });
+
+  it("increases only a project's visible rows when Show more advances its limit", () => {
+    const threads = Array.from({ length: 8 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`project-thread-${index + 1}`) }),
+    );
+    const initial = getVisibleThreadsForProject({
+      threads,
+      selectedThreadKey: null,
+      isProjectExpanded: true,
+      visibleLimit: 5,
+      getThreadKey: threadKey,
+    });
+    const expanded = getVisibleThreadsForProject({
+      threads,
+      selectedThreadKey: null,
+      isProjectExpanded: true,
+      visibleLimit: nextProjectThreadVisibleLimit({
+        action: "more",
+        currentLimit: 5,
+        threadCount: threads.length,
+      }),
+      getThreadKey: threadKey,
+    });
+
+    expect(initial.visibleThreads).toHaveLength(5);
+    expect(expanded.visibleThreads).toEqual(threads);
+  });
+});
+
+describe("getSidebarSettledTailHiddenCount", () => {
+  const threadKey = (thread: Thread) => String(thread.id);
+
+  it("does not count project-owned settled threads in grouped mode", () => {
+    const settledThreads = Array.from({ length: 12 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`project-settled-${index + 1}`) }),
+    );
+
+    expect(
+      getSidebarSettledTailHiddenCount({
+        allSettledThreads: settledThreads,
+        visibleSettledThreads: settledThreads.slice(0, 10),
+        ungroupedSettledThreads: [],
+        isGroupedProjectMode: true,
+        getThreadKey: threadKey,
+      }),
+    ).toBe(0);
+  });
+
+  it("keeps global paging for hidden ungrouped settled threads", () => {
+    const projectThreads = Array.from({ length: 12 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`project-settled-${index + 1}`) }),
+    );
+    const ungroupedThread = makeThread({ id: ThreadId.make("ungrouped-settled") });
+    const allSettledThreads = [...projectThreads, ungroupedThread];
+
+    expect(
+      getSidebarSettledTailHiddenCount({
+        allSettledThreads,
+        visibleSettledThreads: allSettledThreads.slice(0, 10),
+        ungroupedSettledThreads: [ungroupedThread],
+        isGroupedProjectMode: true,
+        getThreadKey: threadKey,
+      }),
+    ).toBe(1);
+
+    expect(
+      getSidebarSettledTailHiddenCount({
+        allSettledThreads,
+        // A selected deep ungrouped row is appended to the normal global
+        // window and therefore remains visible without another page.
+        visibleSettledThreads: [...allSettledThreads.slice(0, 10), ungroupedThread],
+        ungroupedSettledThreads: [ungroupedThread],
+        isGroupedProjectMode: true,
+        getThreadKey: threadKey,
+      }),
+    ).toBe(0);
+  });
+
+  it("preserves the global count in a scoped project view", () => {
+    const settledThreads = Array.from({ length: 12 }, (_, index) =>
+      makeThread({ id: ThreadId.make(`settled-${index + 1}`) }),
+    );
+
+    expect(
+      getSidebarSettledTailHiddenCount({
+        allSettledThreads: settledThreads,
+        visibleSettledThreads: settledThreads.slice(0, 10),
+        ungroupedSettledThreads: [],
+        isGroupedProjectMode: false,
+        getThreadKey: threadKey,
+      }),
+    ).toBe(2);
   });
 });
 
