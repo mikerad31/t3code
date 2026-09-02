@@ -864,6 +864,167 @@ it.effect("makes a completed Codex source eligible for an exact-id handoff", () 
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("hands off immediately after terminal live state clears stale persistence", () => {
+  const harness = makeCompatibleCodexSwitchHarness();
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService.ProviderService;
+    const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+    const threadId = asThreadId("thread-codex-immediate-terminal-handoff");
+    const nativeThreadId = `native-${threadId}`;
+
+    yield* startCodexSwitchSource({
+      provider,
+      threadId,
+      sourceInstanceId: harness.sourceInstanceId,
+    });
+    const turn = yield* provider.sendTurn({
+      threadId,
+      input: "finish before an immediate account switch",
+      attachments: [],
+    });
+    const terminalError = "turn completed with a provider usage limit";
+
+    // Model the production boundary: Codex has already marked its live
+    // session terminal, while ProviderService's subscribed terminal event
+    // has not yet cleared the persisted activeTurnId.
+    harness.source.updateSession(threadId, (session) => ({
+      ...session,
+      status: "error",
+      activeTurnId: undefined,
+      lastError: terminalError,
+    }));
+    const terminalSession = (yield* harness.source.listSessions()).find(
+      (session) => session.threadId === threadId,
+    );
+    assert.equal(terminalSession?.status, "error");
+    assert.equal(terminalSession?.activeTurnId, undefined);
+    assert.equal(terminalSession?.lastError, terminalError);
+    const staleBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(
+      readRuntimePayloadField(staleBinding?.runtimePayload, "activeTurnId"),
+      turn.turnId,
+    );
+    harness.source.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-codex-immediate-terminal-handoff"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:00.500Z",
+      threadId,
+      turnId: turn.turnId,
+      payload: { state: "failed" },
+    });
+
+    const switched = yield* switchCodexTarget({
+      provider,
+      threadId,
+      targetInstanceId: harness.targetInstanceId,
+    });
+
+    assert.equal(switched.providerInstanceId, harness.targetInstanceId);
+    assert.deepEqual(harness.target.startSession.mock.calls[0]?.[0]?.resumeCursor, {
+      threadId: nativeThreadId,
+    });
+    assert.deepEqual(harness.source.stopSession.mock.calls, [[threadId]]);
+    assert.isFalse(yield* harness.source.hasSession(threadId));
+    const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    assert.equal(binding?.providerInstanceId, harness.targetInstanceId);
+    assert.deepEqual(binding?.resumeCursor, { threadId: nativeThreadId });
+    assert.equal(readRuntimePayloadField(binding?.runtimePayload, "activeTurnId"), null);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps an error-state Codex session with an active turn protected", () => {
+  const harness = makeCompatibleCodexSwitchHarness();
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService.ProviderService;
+    const threadId = asThreadId("thread-codex-error-with-active-turn");
+    yield* startCodexSwitchSource({
+      provider,
+      threadId,
+      sourceInstanceId: harness.sourceInstanceId,
+    });
+    const turn = yield* provider.sendTurn({
+      threadId,
+      input: "an error notification while the turn is still active",
+      attachments: [],
+    });
+    harness.source.updateSession(threadId, (session) => ({
+      ...session,
+      status: "error",
+      activeTurnId: turn.turnId,
+      lastError: "provider rate limit is still in flight",
+    }));
+    harness.source.stopSession.mockClear();
+    harness.target.startSession.mockClear();
+
+    const failure = yield* Effect.flip(
+      switchCodexTarget({
+        provider,
+        threadId,
+        targetInstanceId: harness.targetInstanceId,
+      }),
+    );
+    assert.instanceOf(failure, ProviderValidationError);
+    assert.include(failure.issue, "must be idle before switching");
+    assert.deepEqual(harness.source.stopSession.mock.calls, []);
+    assert.equal(harness.target.startSession.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("repeats immediate Codex instance switching without stale active turns", () => {
+  const harness = makeCompatibleCodexSwitchHarness();
+  return Effect.gen(function* () {
+    const provider = yield* ProviderService.ProviderService;
+    const threadId = asThreadId("thread-codex-immediate-switch-stress");
+    const adapters = new Map([
+      [harness.sourceInstanceId, harness.source],
+      [harness.targetInstanceId, harness.target],
+    ] as const);
+    let owner = harness.sourceInstanceId;
+
+    yield* startCodexSwitchSource({
+      provider,
+      threadId,
+      sourceInstanceId: owner,
+    });
+
+    for (let index = 0; index < 40; index += 1) {
+      const current = adapters.get(owner);
+      assert.exists(current);
+      const turn = yield* provider.sendTurn({
+        threadId,
+        input: `stress completion ${index}`,
+        attachments: [],
+      });
+      current.updateSession(threadId, (session) => ({
+        ...session,
+        status: index % 3 === 0 ? "error" : "ready",
+        activeTurnId: undefined,
+      }));
+      current.emit({
+        type: "turn.completed",
+        eventId: asEventId(`evt-codex-immediate-switch-stress-${index}`),
+        provider: CODEX_DRIVER,
+        createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+        threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      });
+
+      const nextOwner =
+        owner === harness.sourceInstanceId ? harness.targetInstanceId : harness.sourceInstanceId;
+      const switched = yield* switchCodexTarget({
+        provider,
+        threadId,
+        targetInstanceId: nextOwner,
+      });
+      assert.equal(switched.providerInstanceId, nextOwner);
+      assert.deepEqual(switched.resumeCursor, { threadId: `native-${threadId}` });
+      owner = nextOwner;
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("queues sendTurn behind handoff and routes the turn only to the committed target", () => {
   const harness = makeCompatibleCodexSwitchHarness();
   return Effect.gen(function* () {
