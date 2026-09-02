@@ -8,7 +8,7 @@ builder, updater validation, and migration utility.
 
 | Property                 | Value                                    |
 | ------------------------ | ---------------------------------------- |
-| Version                  | `0.0.37-hardened.2`                      |
+| Version                  | `0.0.37-hardened.3`                      |
 | Product name             | `T3 Code Hardened`                       |
 | electron-builder `appId` | `com.mikerad31.t3code.hardened`          |
 | Windows user data        | `%APPDATA%\t3code-hardened`              |
@@ -89,7 +89,7 @@ No GitHub release is created by the local build. To activate automatic updates l
    latest-release endpoint.
 3. Upload the NSIS `.exe`, its `.blockmap`, and the generated `latest.yml` together. Do not edit
    the generated hashes or URLs.
-4. Publish the exact matching `t3@0.0.37-hardened.2` server package before exposing the release if
+4. Publish the exact matching `t3@0.0.37-hardened.3` server package before exposing the release if
    remote **Update server** functionality is required. Local desktop startup uses the bundled
    server and does not depend on npm publication.
 5. Run `vp run release:smoke` against the assembled release assets before publishing it to users.
