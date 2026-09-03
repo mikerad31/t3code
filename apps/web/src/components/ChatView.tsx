@@ -1315,6 +1315,7 @@ function ChatViewContent(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const branchThread = useAtomCommand(serverEnvironment.threadBranch, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1499,6 +1500,7 @@ function ChatViewContent(props: ChatViewProps) {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
+  const [branchingTurnId, setBranchingTurnId] = useState<TurnId | null>(null);
 
   useEffect(() => {
     setIsWorkspaceFileDragActive(false);
@@ -2953,6 +2955,52 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const canBranchInNewChat =
+    isServerThread &&
+    !isWorking &&
+    activeThread !== undefined &&
+    activeProviderStatus?.driver === "codex";
+  const handleBranchInNewChat = useCallback(
+    async (lastTurnId: TurnId) => {
+      const sourceThread = activeThread;
+      if (!canBranchInNewChat || sourceThread === undefined || branchingTurnId !== null) {
+        return;
+      }
+      setBranchingTurnId(lastTurnId);
+      try {
+        const result = await branchThread({
+          environmentId: sourceThread.environmentId,
+          input: {
+            threadId: sourceThread.id,
+            lastTurnId,
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not branch this conversation",
+                description: error instanceof Error ? error.message : "Native Codex fork failed.",
+              }),
+            );
+          }
+          return;
+        }
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: sourceThread.environmentId,
+            threadId: result.value.threadId,
+          },
+        });
+      } finally {
+        setBranchingTurnId(null);
+      }
+    },
+    [activeThread, branchThread, branchingTurnId, canBranchInNewChat, navigate],
+  );
   const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
     useLocalStorage(
       `t3code:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
@@ -7249,6 +7297,8 @@ function ChatViewContent(props: ChatViewProps) {
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                onBranchInNewChat={canBranchInNewChat ? handleBranchInNewChat : undefined}
+                branchingTurnId={branchingTurnId}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
                 contentInsetEndAdjustment={composerOverlayHeight}

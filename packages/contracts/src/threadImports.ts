@@ -12,6 +12,7 @@ import {
   MessageId,
   NonNegativeInt,
   ProjectId,
+  TurnId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -99,6 +100,9 @@ export const ThreadImportErrorCode = Schema.Literals([
   "source-unavailable",
   "transcript-unreadable",
   "import-failed",
+  "thread-not-found",
+  "turn-not-forkable",
+  "fork-failed",
 ]);
 export type ThreadImportErrorCode = typeof ThreadImportErrorCode.Type;
 
@@ -109,3 +113,18 @@ export class ThreadImportError extends Schema.TaggedErrorClass<ThreadImportError
     message: TrimmedNonEmptyString,
   },
 ) {}
+
+/** Branch one completed native Codex turn into a new T3 conversation. */
+export const ThreadBranchInput = Schema.Struct({
+  threadId: ThreadId,
+  /** Native Codex turn id; the fork boundary is inclusive. */
+  lastTurnId: TurnId,
+});
+export type ThreadBranchInput = typeof ThreadBranchInput.Type;
+
+export const ThreadBranchResult = Schema.Struct({
+  threadId: ThreadId,
+  nativeThreadId: TrimmedNonEmptyString,
+  forkedFromId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ThreadBranchResult = typeof ThreadBranchResult.Type;

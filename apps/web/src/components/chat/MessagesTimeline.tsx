@@ -70,8 +70,10 @@ import {
   DownloadIcon,
   EyeIcon,
   FileIcon,
+  GitBranchIcon,
   GlobeIcon,
   HammerIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -173,6 +175,8 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  onBranchInNewChat?: ((turnId: TurnId) => void) | undefined;
+  branchingTurnId: TurnId | null;
 }
 
 interface TimelineRowActivityState {
@@ -272,6 +276,8 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  onBranchInNewChat?: ((turnId: TurnId) => void) | undefined;
+  branchingTurnId?: TurnId | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +319,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  onBranchInNewChat,
+  branchingTurnId = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -627,6 +635,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onBranchInNewChat,
+      branchingTurnId,
     }),
     [
       timestampFormat,
@@ -646,6 +656,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onBranchInNewChat,
+      branchingTurnId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1335,6 +1347,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            <AssistantBranchButton row={row} />
             <AssistantCopyButton row={row} />
             {!row.message.streaming && (
               <Tooltip>
@@ -1352,6 +1365,41 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantBranchButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const turnId = row.message.turnId;
+  if (!ctx.onBranchInNewChat || !turnId || !row.showAssistantMeta) {
+    return null;
+  }
+
+  const busy = ctx.branchingTurnId !== null;
+  const active = ctx.branchingTurnId === turnId;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            aria-label="Branch in new chat"
+            aria-busy={active || undefined}
+            onClick={() => ctx.onBranchInNewChat?.(turnId)}
+          />
+        }
+      >
+        {active ? (
+          <LoaderCircleIcon className="size-3 motion-safe:animate-spin" />
+        ) : (
+          <GitBranchIcon className="size-3" />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">Branch in new chat</TooltipPopup>
+    </Tooltip>
   );
 }
 

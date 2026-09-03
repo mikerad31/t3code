@@ -855,6 +855,41 @@ describe("runtime command runner", () => {
     registry.dispose();
   });
 
+  it("coalesces duplicate branch activations for one environment/thread/turn", async () => {
+    const latch = Latch.makeUnsafe();
+    let executions = 0;
+    const runtime = Atom.runtime(Layer.empty);
+    const command = createRuntimeCommand(runtime, {
+      label: "test.thread-branch",
+      concurrency: {
+        mode: "singleFlight",
+        key: ({
+          environmentId,
+          input,
+        }: {
+          readonly environmentId: string;
+          readonly input: { readonly threadId: string; readonly lastTurnId: string };
+        }) => `${environmentId}:${input.threadId}:${input.lastTurnId}`,
+      },
+      execute: () =>
+        Effect.sync(() => executions++).pipe(Effect.andThen(latch.await), Effect.as("branched")),
+    });
+    const registry = AtomRegistry.make();
+    const target = {
+      environmentId: "environment-branch",
+      input: { threadId: "thread-branch", lastTurnId: "turn-branch" },
+    } as const;
+
+    const first = command.run(registry, target);
+    const second = command.run(registry, target);
+    latch.openUnsafe();
+
+    expect(await first).toMatchObject({ _tag: "Success", value: "branched", waiting: false });
+    expect(await second).toMatchObject({ _tag: "Success", value: "branched", waiting: false });
+    expect(executions).toBe(1);
+    registry.dispose();
+  });
+
   it("coalesces pending latest-value commands without interrupting the active call", async () => {
     const firstLatch = Latch.makeUnsafe();
     const executed: number[] = [];

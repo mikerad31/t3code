@@ -4,6 +4,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -57,12 +58,15 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
             },
             runtimeMode: "full-access",
             interactionMode: "default",
+            branch: "feature/source",
+            worktreePath: "/workspace/imported",
             messages: [
               {
                 id: MessageId.make("historical-user-message"),
                 role: "user",
                 text: "Historical user message",
                 createdAt: MESSAGE_AT,
+                turnId: TurnId.make("historical-turn"),
               },
             ],
             createdAt: CREATED_AT,
@@ -86,12 +90,15 @@ it.layer(NodeServices.layer)("thread import decider", (it) => {
         }
         expect(projected.threads[0]).toMatchObject({
           id: threadId,
+          branch: "feature/source",
+          worktreePath: "/workspace/imported",
           settledOverride: "active",
           settledAt: null,
           unsettledAt: UPDATED_AT,
           createdAt: CREATED_AT,
           updatedAt: UPDATED_AT,
         });
+        expect(projected.threads[0]?.messages[0]?.turnId).toBe(TurnId.make("historical-turn"));
       }),
   );
 

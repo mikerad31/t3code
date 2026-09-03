@@ -48,6 +48,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type { ProviderThreadForkSnapshot } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -207,6 +208,31 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.succeed({ threadId, turns: [] }),
   );
 
+  const forkThread = vi.fn(
+    (
+      threadId: ThreadId,
+      lastTurnId: TurnId,
+    ): Effect.Effect<ProviderThreadForkSnapshot, ProviderAdapterError> =>
+      Effect.succeed({
+        threadId: `forked-${String(threadId)}`,
+        forkedFromId: `native-${String(threadId)}`,
+        cwd: "/tmp/codex-switch-fixture",
+        model: "gpt-5.6-codex",
+        modelProvider: "openai",
+        reasoningEffort: "high",
+        turns: [
+          {
+            id: lastTurnId,
+            items: [],
+            startedAt: null,
+            completedAt: null,
+            status: "completed",
+            error: null,
+          },
+        ],
+      }),
+  );
+
   const uploadFeedback = vi.fn(
     (
       input: ProviderUploadFeedbackInput,
@@ -236,6 +262,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    forkThread,
     ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
     stopAll,
     get streamEvents() {
@@ -272,6 +299,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     hasSession,
     readThread,
     rollbackThread,
+    forkThread,
     uploadFeedback,
     stopAll,
   };
@@ -970,6 +998,61 @@ it.effect("keeps an error-state Codex session with an active turn protected", ()
     assert.equal(harness.target.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect(
+  "forks only an idle terminal Codex session and reconciles stale active-turn state",
+  () => {
+    const harness = makeCompatibleCodexSwitchHarness();
+    return Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const forkThread = provider.forkThread;
+      assert.exists(forkThread);
+      const threadId = asThreadId("thread-codex-fork-idle-boundary");
+      const lastTurnId = asTurnId("turn-codex-fork-boundary");
+      yield* startCodexSwitchSource({
+        provider,
+        threadId,
+        sourceInstanceId: harness.sourceInstanceId,
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: harness.sourceInstanceId,
+        status: "running",
+        runtimeMode: "full-access",
+        runtimePayload: { activeTurnId: lastTurnId },
+      });
+
+      harness.source.updateSession(threadId, (session) => ({
+        ...session,
+        status: "error",
+        activeTurnId: lastTurnId,
+        lastError: "Codex usage limit reached",
+      }));
+      const activeFailure = yield* forkThread({ threadId, lastTurnId }).pipe(Effect.flip);
+      assert.instanceOf(activeFailure, ProviderValidationError);
+      assert.include(activeFailure.issue, "must be idle before forking");
+      assert.equal(harness.source.forkThread.mock.calls.length, 0);
+
+      harness.source.updateSession(threadId, (session) => ({
+        ...session,
+        status: "error",
+        activeTurnId: undefined,
+        lastError: "Codex usage limit reached",
+      }));
+      const forked = yield* forkThread({ threadId, lastTurnId });
+      assert.equal(forked.threadId, `forked-${threadId}`);
+      assert.deepEqual(harness.source.forkThread.mock.calls, [[threadId, lastTurnId]]);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(readRuntimePayloadField(binding?.runtimePayload, "activeTurnId"), null);
+      assert.equal(
+        readRuntimePayloadField(binding?.runtimePayload, "lastRuntimeEvent"),
+        "codex.fork.terminal-reconciled",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 it.effect("repeats immediate Codex instance switching without stale active turns", () => {
   const harness = makeCompatibleCodexSwitchHarness();

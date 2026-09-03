@@ -719,6 +719,14 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    threadBranch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:thread-branch",
+      tag: WS_METHODS.threadBranch,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.threadId}:${input.lastTurnId}`,
+      },
+    }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,

@@ -331,6 +331,59 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("px-1 text-sm leading-relaxed text-muted-foreground");
   });
 
+  it("renders the native branch action only for a completed assistant turn", () => {
+    const turnId = TurnId.make("turn-branchable");
+    const assistant = buildAssistantTimelineEntry("A completed answer.");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        latestTurn={{
+          turnId,
+          state: "completed",
+          startedAt: MESSAGE_CREATED_AT,
+          completedAt: MESSAGE_CREATED_AT,
+        }}
+        onBranchInNewChat={() => {}}
+        timelineEntries={[
+          {
+            ...assistant,
+            message: { ...assistant.message, turnId },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Branch in new chat"');
+    expect(markup).toContain("Branch in new chat");
+    expect(markup).toContain("lucide-git-branch");
+  });
+
+  it("does not expose branching while the turn is still running", () => {
+    const turnId = TurnId.make("turn-still-running");
+    const assistant = buildAssistantTimelineEntry("Still working.");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        latestTurn={{
+          turnId,
+          state: "running",
+          startedAt: MESSAGE_CREATED_AT,
+          completedAt: null,
+        }}
+        onBranchInNewChat={() => {}}
+        timelineEntries={[
+          {
+            ...assistant,
+            message: { ...assistant.message, turnId, streaming: true },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain('aria-label="Branch in new chat"');
+  });
+
   it("uses the larger leading inset only when the top fade is enabled", () => {
     const timelineEntries = [buildUserTimelineEntry("Hello")];
 

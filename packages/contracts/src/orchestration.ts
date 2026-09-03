@@ -1046,6 +1046,7 @@ const ThreadImportCommandMessage = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   createdAt: IsoDateTime,
+  turnId: Schema.optional(TurnId),
 });
 
 const ThreadImportCommand = Schema.Struct({
@@ -1059,6 +1060,8 @@ const ThreadImportCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   messages: Schema.Array(ThreadImportCommandMessage),
   // Historical imports can arrive settled without transiently entering the active inbox.
   settled: Schema.optional(Schema.Boolean),

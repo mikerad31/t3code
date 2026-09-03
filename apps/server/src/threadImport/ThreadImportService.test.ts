@@ -1,9 +1,13 @@
 import {
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
+  type OrchestrationThread,
   type OrchestrationReadModel,
   type OrchestrationThreadShell,
   type ServerProvider,
@@ -30,6 +34,7 @@ import type {
   ProviderRuntimeBinding,
   ProviderSessionDirectory,
 } from "../provider/Services/ProviderSessionDirectory.ts";
+import type { ProviderThreadForkSnapshot } from "../provider/Services/ProviderAdapter.ts";
 import { makeThreadImportService } from "./ThreadImportService.ts";
 
 const projectId = ProjectId.make("project-import-test");
@@ -112,10 +117,13 @@ function makeHarness(options: {
   readonly sessionUpsert?: ProviderSessionDirectory["Service"]["upsert"];
   readonly providers?: ReadonlyArray<ProviderInstance>;
   readonly project?: OrchestrationProjectShell;
+  readonly threadDetail?: OrchestrationThread;
+  readonly initialBindings?: ReadonlyArray<ProviderRuntimeBinding>;
+  readonly forkThread?: NonNullable<ProviderService["Service"]["forkThread"]>;
 }) {
   let importedThread: OrchestrationThreadShell | null = null;
   const commands: OrchestrationCommand[] = [];
-  const bindings: ProviderRuntimeBinding[] = [];
+  const bindings: ProviderRuntimeBinding[] = [...(options.initialBindings ?? [])];
 
   const projection = {
     getProjectShellById: () => Effect.succeed(Option.some(options.project ?? project)),
@@ -128,6 +136,10 @@ function makeHarness(options: {
         importedThread !== null && String(importedThread.id) === String(threadId)
           ? Option.some(importedThread)
           : Option.none(),
+      ),
+    getThreadDetailById: () =>
+      Effect.succeed(
+        options.threadDetail === undefined ? Option.none() : Option.some(options.threadDetail),
       ),
   } as unknown as ProjectionSnapshotQuery["Service"];
 
@@ -191,7 +203,10 @@ function makeHarness(options: {
     binding,
     afterBindingCommit,
   ) => providerSessions.upsert(binding).pipe(Effect.andThen(afterBindingCommit));
-  const providerService = { reconcileSessionBinding } as ProviderService["Service"];
+  const providerService = {
+    reconcileSessionBinding,
+    ...(options.forkThread === undefined ? {} : { forkThread: options.forkThread }),
+  } as ProviderService["Service"];
 
   return {
     service: makeThreadImportService({
@@ -585,6 +600,252 @@ describe("ThreadImportService", () => {
       });
       expect(result.results[0]?.error).toContain("no readable user or assistant messages");
       expect(harness.commands).toHaveLength(0);
+    }),
+  );
+
+  it.effect("branches through the selected native turn without cloning later history", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-source");
+      const firstTurnId = TurnId.make("native-turn-1");
+      const selectedTurnId = TurnId.make("native-turn-2");
+      const laterTurnId = TurnId.make("native-turn-3");
+      const sourceNativeThreadId = "native-parent-thread";
+      const childNativeThreadId = "native-child-thread";
+      const modelSelection = {
+        instanceId,
+        model: "gpt-5.6-codex",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      } as const;
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Keep the source title",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/source",
+        worktreePath: "/workspace/project",
+        latestTurn: {
+          turnId: selectedTurnId,
+          state: "completed",
+          requestedAt: "2026-08-20T10:00:00.000Z",
+          startedAt: "2026-08-20T10:00:01.000Z",
+          completedAt: "2026-08-20T10:00:02.000Z",
+          assistantMessageId: MessageId.make("source-assistant-2"),
+        },
+        messages: [
+          {
+            id: MessageId.make("source-user-1"),
+            role: "user",
+            text: "First prompt",
+            turnId: firstTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+          {
+            id: MessageId.make("source-assistant-1"),
+            role: "assistant",
+            text: "First answer",
+            turnId: firstTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+          {
+            id: MessageId.make("source-user-2"),
+            role: "user",
+            text: "Selected prompt",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:02.000Z",
+            updatedAt: "2026-08-20T10:00:02.000Z",
+          },
+          {
+            id: MessageId.make("source-assistant-2"),
+            role: "assistant",
+            text: "Selected answer",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:02.000Z",
+            updatedAt: "2026-08-20T10:00:02.000Z",
+          },
+          {
+            id: MessageId.make("source-user-3"),
+            role: "user",
+            text: "Later source prompt",
+            turnId: laterTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:03.000Z",
+            updatedAt: "2026-08-20T10:00:03.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const forked = {
+        threadId: childNativeThreadId,
+        forkedFromId: sourceNativeThreadId,
+        cwd: "/workspace/project",
+        model: modelSelection.model,
+        modelProvider: "openai",
+        reasoningEffort: "high",
+        turns: [
+          {
+            id: firstTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "First prompt" }],
+              },
+              { type: "agentMessage", text: "First answer" },
+            ],
+            startedAt: 1_755_667_201,
+            completedAt: 1_755_667_201,
+            status: "completed",
+            error: null,
+          },
+          {
+            id: selectedTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Selected prompt" }],
+              },
+              { type: "agentMessage", text: "Selected answer" },
+            ],
+            startedAt: 1_755_667_202,
+            completedAt: 1_755_667_202,
+            status: "completed",
+            error: null,
+          },
+          {
+            id: laterTurnId,
+            items: [{ type: "agentMessage", text: "Must stay out of the child" }],
+            startedAt: 1_755_667_203,
+            completedAt: 1_755_667_203,
+            status: "completed",
+            error: null,
+          },
+        ],
+      } satisfies ProviderThreadForkSnapshot;
+      const forkCalls: Array<{ threadId: ThreadId; lastTurnId: TurnId }> = [];
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: sourceNativeThreadId },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: "/workspace/project", modelSelection },
+      };
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        forkThread: (input) =>
+          Effect.sync(() => {
+            forkCalls.push(input);
+            return forked;
+          }),
+      });
+
+      const result = yield* harness.service.branch({
+        threadId: sourceThreadId,
+        lastTurnId: selectedTurnId,
+      });
+
+      expect(forkCalls).toEqual([{ threadId: sourceThreadId, lastTurnId: selectedTurnId }]);
+      expect(result.nativeThreadId).toBe(childNativeThreadId);
+      expect(result.nativeThreadId).not.toBe(sourceNativeThreadId);
+      expect(harness.commands).toHaveLength(1);
+      const command = harness.commands[0]!;
+      expect(command.type).toBe("thread.import");
+      if (command.type !== "thread.import") throw new Error("expected branch import command");
+      expect(command.projectId).toBe(projectId);
+      expect(command.title).toBe(sourceDetail.title);
+      expect(command.branch).toBe(sourceDetail.branch);
+      expect(command.worktreePath).toBe(sourceDetail.worktreePath);
+      expect(command.modelSelection).toEqual(modelSelection);
+      expect(command.messages.map((message) => message.text)).toEqual([
+        "First prompt",
+        "First answer",
+        "Selected prompt",
+        "Selected answer",
+      ]);
+      expect(command.messages.every((message) => message.turnId !== laterTurnId)).toBe(true);
+      expect(harness.bindings).toContainEqual(sourceBinding);
+      expect(harness.bindings.at(-1)).toMatchObject({
+        threadId: command.threadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        resumeCursor: { threadId: childNativeThreadId },
+        runtimePayload: {
+          cwd: "/workspace/project",
+          modelSelection,
+          forkedFromId: sourceNativeThreadId,
+          reasoningEffort: "high",
+        },
+      });
+    }),
+  );
+
+  it.effect("leaves the parent usable when native fork creation fails", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-failure-source");
+      const selectedTurnId = TurnId.make("native-turn-failure-boundary");
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Source remains available",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: { turnId: selectedTurnId, state: "completed" },
+        messages: [
+          {
+            id: MessageId.make("source-assistant-failure"),
+            role: "assistant",
+            text: "Completed before the fork failed",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:00.000Z",
+            updatedAt: "2026-08-20T10:00:00.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-failure-parent" },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        forkThread: () =>
+          Effect.fail(
+            new ProviderValidationError({
+              operation: "ProviderService.forkThread",
+              issue: "Codex fork request failed",
+            }),
+          ),
+      });
+
+      const failure = yield* harness.service
+        .branch({ threadId: sourceThreadId, lastTurnId: selectedTurnId })
+        .pipe(Effect.flip);
+
+      expect(failure.code).toBe("fork-failed");
+      expect(failure.message).toContain("Codex fork request failed");
+      expect(harness.commands).toHaveLength(0);
+      expect(harness.bindings).toEqual([sourceBinding]);
     }),
   );
 
