@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -244,16 +245,25 @@ function failingSpawnerLayer(description: string) {
   );
 }
 
-function hangingScopedSpawnerLayer(killCalls: Ref.Ref<number>) {
+function hangingScopedSpawnerLayer(killCalls: Ref.Ref<number>, childRunning: Ref.Ref<boolean>) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make(() =>
       Effect.gen(function* () {
+        const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const kill = Effect.gen(function* () {
+          if (!(yield* Ref.get(childRunning))) {
+            return;
+          }
+          yield* Ref.set(childRunning, false);
+          yield* Ref.update(killCalls, (current) => current + 1);
+          yield* Deferred.succeed(exited, ChildProcessSpawner.ExitCode(137));
+        });
         const handle = ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.never,
-          isRunning: Effect.succeed(true),
-          kill: () => Ref.update(killCalls, (current) => current + 1),
+          exitCode: Deferred.await(exited),
+          isRunning: Ref.get(childRunning),
+          kill: () => kill,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
           stdout: Stream.never,
@@ -506,16 +516,35 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      it.effect("keeps a successful probe ready when its finalizer is slow", () =>
+        Effect.gen(function* () {
+          const finalized = yield* Ref.make(false);
+          const statusFiber = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.acquireRelease(Effect.succeed(makeCodexProbeSnapshot()), () =>
+              Ref.set(finalized, true).pipe(Effect.andThen(Effect.sleep("11 seconds"))),
+            ),
+          ).pipe(Effect.forkChild);
+
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("12 seconds");
+
+          const status = yield* Fiber.join(statusFiber);
+          assert.strictEqual(status.status, "ready");
+          assert.isTrue(yield* Ref.get(finalized));
+        }),
+      );
+
       it.effect("closes the app-server probe scope when provider status times out", () =>
         Effect.gen(function* () {
           const killCalls = yield* Ref.make(0);
+          const childRunning = yield* Ref.make(true);
           const statusFiber = yield* checkCodexProviderStatus(defaultCodexSettings).pipe(
-            Effect.provide(hangingScopedSpawnerLayer(killCalls)),
+            Effect.provide(hangingScopedSpawnerLayer(killCalls, childRunning)),
             Effect.forkChild,
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("13 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -525,6 +554,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             "Timed out while checking Codex app-server provider status.",
           );
           assert.strictEqual(yield* Ref.get(killCalls), 1);
+          assert.isFalse(yield* Ref.get(childRunning));
         }),
       );
     });

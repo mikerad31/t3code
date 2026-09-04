@@ -38,6 +38,7 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_APP_SERVER_PROBE_SHUTDOWN_TIMEOUT = Duration.seconds(2);
 const CODEX_RATE_LIMIT_PROBE_TIMEOUT = Duration.seconds(3);
 
 const CODEX_PRESENTATION = {
@@ -55,6 +56,32 @@ export interface CodexAppServerProviderSnapshot {
     | CodexSchema.V2GetAccountRateLimitsResponse["rateLimitResetCredits"]
     | null;
 }
+
+const closeCodexAppServerProbe = Effect.fn("closeCodexAppServerProbe")(function* (
+  client: CodexClient.CodexAppServerClient["Service"],
+  child: ChildProcessSpawner.ChildProcessHandle,
+) {
+  // Ending the transport lets the child observe stdin EOF before the bounded
+  // process-exit wait and SIGKILL fallback.
+  yield* client.close.pipe(
+    Effect.timeoutOption(CODEX_APP_SERVER_PROBE_SHUTDOWN_TIMEOUT),
+    Effect.ignore,
+  );
+
+  const exited = yield* child.exitCode.pipe(
+    Effect.timeoutOption(CODEX_APP_SERVER_PROBE_SHUTDOWN_TIMEOUT),
+    Effect.match({
+      onFailure: () => false,
+      onSuccess: Option.isSome,
+    }),
+  );
+
+  if (exited) return;
+
+  yield* child
+    .kill({ killSignal: "SIGKILL" })
+    .pipe(Effect.timeoutOption(CODEX_APP_SERVER_PROBE_SHUTDOWN_TIMEOUT), Effect.ignore);
+});
 
 const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
   none: "None",
@@ -373,6 +400,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
     Effect.provide(clientContext),
   );
+  yield* Effect.addFinalizer(() => closeCodexAppServerProbe(client, child));
 
   const initialize = yield* client.request("initialize", {
     clientInfo: {
@@ -568,8 +596,10 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     customModels: codexSettings.customModels,
     environment: resolvedEnvironment,
   }).pipe(
-    Effect.scoped,
+    // Scope teardown belongs after the RPC deadline: it closes the temporary
+    // client and child without consuming the provider health timeout.
     Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
+    Effect.scoped,
     Effect.result,
   );
 
