@@ -117,6 +117,7 @@ function makeHarness(options: {
   readonly candidates: ReadonlyArray<ProviderThreadImportCandidate>;
   readonly scan?: ProviderThreadImportShape["scan"];
   readonly read: ProviderThreadImportShape["read"];
+  readonly readNativeThread?: ProviderThreadImportShape["readNativeThread"];
   readonly sessionUpsert?: ProviderSessionDirectory["Service"]["upsert"];
   readonly providers?: ReadonlyArray<ProviderInstance>;
   readonly project?: OrchestrationProjectShell;
@@ -174,6 +175,9 @@ function makeHarness(options: {
   const provider = makeProvider({
     scan: options.scan ?? (() => Effect.succeed(options.candidates)),
     read: options.read,
+    ...(options.readNativeThread === undefined
+      ? {}
+      : { readNativeThread: options.readNativeThread }),
   });
   const providerInstances = {
     getInstance: () => Effect.succeed(provider),
@@ -1027,6 +1031,134 @@ describe("ThreadImportService", () => {
         "First historical answer",
         "Selected historical prompt",
         "Selected historical answer",
+      ]);
+    }),
+  );
+
+  it.effect("recovers imported rows when timestamp ties reorder native assistant items", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-imported-order-source");
+      const nativeThreadId = ThreadId.make("native-imported-order-source");
+      const nativeTurnId = TurnId.make("native-imported-order-turn");
+      const tiedTimestamp = "2026-08-20T10:00:00.000Z";
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Imported Codex source",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        // This is the historical projection shape: imported rows have no
+        // turn ids and a single import timestamp. The message-id tie-breaker
+        // puts the assistant rows in a different order than native items.
+        messages: [
+          {
+            id: MessageId.make("imported-message:prompt"),
+            role: "user",
+            text: "Historical prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:01-second"),
+            role: "assistant",
+            text: "Second native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:02-first"),
+            role: "assistant",
+            text: "First native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:03-third"),
+            role: "assistant",
+            text: "Third native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const native = {
+        threadId: nativeThreadId,
+        turns: [
+          {
+            id: nativeTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Historical prompt" }],
+              },
+              { type: "reasoning", summary: [] },
+              { type: "agentMessage", text: "First native response" },
+              { type: "commandExecution", command: "echo activity" },
+              { type: "agentMessage", text: "Second native response" },
+              { type: "agentMessage", text: "Third native response" },
+            ],
+          },
+        ],
+      } satisfies ProviderThreadSnapshot;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: nativeThreadId },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      let legacyReadCalled = false;
+      let nativeReadInput: { projectRoot: string; externalThreadId: string } | undefined;
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        readNativeThread: (input) =>
+          Effect.sync(() => {
+            nativeReadInput = input;
+            return native;
+          }),
+        readThread: () =>
+          Effect.sync(() => {
+            legacyReadCalled = true;
+            return native;
+          }),
+      });
+
+      const boundaries = yield* harness.service.branchBoundaries({ threadId: sourceThreadId });
+      expect(nativeReadInput).toEqual({
+        projectRoot: project.workspaceRoot,
+        externalThreadId: String(nativeThreadId),
+      });
+      expect(legacyReadCalled).toBe(false);
+      expect(boundaries.boundaries).toEqual([
+        {
+          messageId: MessageId.make("imported-message:01-second"),
+          turnId: nativeTurnId,
+        },
+        {
+          messageId: MessageId.make("imported-message:02-first"),
+          turnId: nativeTurnId,
+        },
+        {
+          messageId: MessageId.make("imported-message:03-third"),
+          turnId: nativeTurnId,
+        },
       ]);
     }),
   );

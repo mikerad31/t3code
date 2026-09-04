@@ -119,40 +119,37 @@ function resolveHistoricalBranchBoundaries(
       return message === null ? [] : [{ ...message, turnId: turn.id }];
     }),
   );
-  if (projected.length === 0 || nativeMessages.length < projected.length) {
+  if (projected.length === 0 || nativeMessages.length === 0) {
     return [];
   }
 
-  const matchingStarts: number[] = [];
-  for (let start = 0; start <= nativeMessages.length - projected.length; start += 1) {
-    let matches = true;
-    for (let index = 0; index < projected.length; index += 1) {
-      const projectedMessage = projected[index]!;
-      const nativeMessage = nativeMessages[start + index]!;
-      if (
-        projectedMessage.role !== nativeMessage.role ||
-        projectedMessage.text !== nativeMessage.text ||
-        (projectedMessage.turnId !== null && projectedMessage.turnId !== nativeMessage.turnId)
-      ) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) matchingStarts.push(start);
+  // Imported projections can assign one timestamp to every message in a
+  // historical turn. ProjectionSnapshotQuery then orders those ties by the
+  // imported message id, which is not the native item order. Resolve each
+  // row against the native item text instead of requiring a contiguous
+  // projection-shaped sequence. A boundary is accepted only when its exact
+  // role/text pair occurs once and is not claimed by another projected row;
+  // duplicate or missing matches stay hidden for that row.
+  const candidates = projected.map((message) =>
+    nativeMessages.flatMap((nativeMessage, index) =>
+      message.role === nativeMessage.role &&
+      message.text === nativeMessage.text &&
+      (message.turnId === null || message.turnId === nativeMessage.turnId)
+        ? [index]
+        : [],
+    ),
+  );
+  const candidateUseCounts = new Map<number, number>();
+  for (const matches of candidates) {
+    if (matches.length !== 1) continue;
+    const match = matches[0]!;
+    candidateUseCounts.set(match, (candidateUseCounts.get(match) ?? 0) + 1);
   }
-  if (matchingStarts.length !== 1) {
-    return [];
-  }
-
-  const start = matchingStarts[0]!;
   return projected.flatMap((message, index) => {
     if (message.role !== "assistant" || message.turnId !== null) return [];
-    return [
-      {
-        messageId: message.messageId,
-        turnId: nativeMessages[start + index]!.turnId,
-      },
-    ];
+    const matches = candidates[index]!;
+    if (matches.length !== 1 || candidateUseCounts.get(matches[0]!) !== 1) return [];
+    return [{ messageId: message.messageId, turnId: nativeMessages[matches[0]!]!.turnId }];
   });
 }
 
@@ -722,7 +719,33 @@ export const makeThreadImportService = (input: {
             ),
           ),
       );
-      if (sourceBinding?.provider !== CODEX_DRIVER || providerService.readThread === undefined) {
+      if (sourceBinding?.provider !== CODEX_DRIVER) {
+        return [];
+      }
+
+      const providerInstanceId =
+        sourceBinding.providerInstanceId ?? source.modelSelection.instanceId;
+      const providerInstance = yield* providerInstances.getInstance(providerInstanceId);
+      const readNativeThread =
+        providerInstance !== undefined && hasThreadImport(providerInstance)
+          ? providerInstance.threadImport.readNativeThread
+          : undefined;
+      const sourceNativeThreadId = codexResumeThreadId(sourceBinding.resumeCursor);
+      if (readNativeThread !== undefined && sourceNativeThreadId !== undefined) {
+        const project = yield* readProject(source.projectId);
+        const native = yield* readNativeThread({
+          projectRoot: project.workspaceRoot,
+          externalThreadId: sourceNativeThreadId,
+        }).pipe(Effect.mapError((cause) => error("provider-unavailable", cause.detail)));
+        if (native.threadId !== sourceNativeThreadId) {
+          return [];
+        }
+        return resolveHistoricalBranchBoundaries(source, {
+          threadId: ThreadId.make(native.threadId),
+          turns: native.turns,
+        });
+      }
+      if (providerService.readThread === undefined) {
         return [];
       }
 

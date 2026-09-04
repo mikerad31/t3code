@@ -2,7 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
-import type { CodexSettings } from "@t3tools/contracts";
+import { TurnId, type CodexSettings } from "@t3tools/contracts";
 import { HostProcessPlatform, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -305,6 +305,40 @@ export function makeCodexThreadImport(input: {
     );
   };
 
+  const readNativeThread = ({
+    projectRoot,
+    externalThreadId,
+  }: {
+    readonly projectRoot: string;
+    readonly externalThreadId: string;
+  }) =>
+    withClient(
+      (client) =>
+        client.request("thread/read", { threadId: externalThreadId, includeTurns: true }).pipe(
+          Effect.flatMap((response) =>
+            ensureProjectThread(response.thread, projectRoot, externalThreadId),
+          ),
+          Effect.flatMap((thread) =>
+            thread.id === externalThreadId
+              ? Effect.succeed(thread)
+              : Effect.fail(
+                  new ProviderThreadImportError({
+                    operation: "read",
+                    detail: `Codex returned native thread '${thread.id}' while reading '${externalThreadId}'.`,
+                  }),
+                ),
+          ),
+          Effect.map((thread) => ({
+            threadId: thread.id,
+            turns: thread.turns.map((turn) => ({
+              id: TurnId.make(turn.id),
+              items: turn.items,
+            })),
+          })),
+        ),
+      "read",
+    );
+
   return {
     scan: ({ projectRoot }) =>
       withClient(
@@ -340,5 +374,6 @@ export function makeCodexThreadImport(input: {
           ),
         "read",
       ),
+    readNativeThread,
   };
 }
