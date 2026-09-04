@@ -68,6 +68,7 @@ export interface CodexAppServerPatchedProtocol {
     requestId: string | number,
     error: CodexError.CodexAppServerRequestError,
   ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+  readonly close: Effect.Effect<void>;
 }
 
 interface CodexAppServerPendingRequest {
@@ -158,6 +159,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const protocolScope = yield* Scope.Scope;
     const requestHandlerScope = yield* Scope.fork(protocolScope, "parallel");
     const outgoing = yield* Queue.unbounded<string, Cause.Done<void>>();
+    const outgoingClosed = yield* Deferred.make<void>();
     const incomingNotifications =
       yield* Queue.sliding<CodexAppServerIncomingNotification>(MAX_BUFFERED_RAW_MESSAGES);
     const incomingRequests =
@@ -445,7 +447,11 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       Effect.forkScoped,
     );
 
-    yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
+    yield* Stream.fromQueue(outgoing).pipe(
+      Stream.run(options.stdio.stdout()),
+      Effect.ensuring(Deferred.succeed(outgoingClosed, undefined).pipe(Effect.asVoid)),
+      Effect.forkScoped,
+    );
 
     const request = (method: string, payload?: unknown) =>
       Effect.gen(function* () {
@@ -473,6 +479,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
         ...(payload !== undefined ? { params: payload } : {}),
       });
 
+    const close = Queue.end(outgoing).pipe(Effect.andThen(Deferred.await(outgoingClosed)));
+
     return {
       incomingNotifications: Stream.fromQueue(incomingNotifications),
       incomingRequests: Stream.fromQueue(incomingRequests),
@@ -480,6 +488,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       notify,
       respond,
       respondError,
+      close,
     } satisfies CodexAppServerPatchedProtocol;
   },
 );

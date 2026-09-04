@@ -47,6 +47,7 @@ export class CodexAppServerClient extends Context.Service<
       method: M,
       payload: CodexRpc.ClientNotificationParamsByMethod[M],
     ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+    readonly close: Effect.Effect<void>;
     readonly handleServerRequest: <M extends CodexRpc.ServerRequestMethod>(
       method: M,
       handler: (
@@ -229,6 +230,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
     },
     request,
     notify,
+    close: transport.close,
     handleServerRequest: (method, handler) =>
       Effect.sync(() => {
         requestHandlers.set(method, handler as ServerRequestHandler);

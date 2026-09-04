@@ -154,4 +154,33 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       assert.equal(initialized.userAgent, "mock-codex-app-server");
     }),
   );
+
+  it.effect("closes child stdin so the app-server exits before scope teardown", () =>
+    Effect.gen(function* () {
+      const handle = yield* makeHandle();
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(CodexClient.layerChildProcess(handle), scope);
+
+      yield* Effect.gen(function* () {
+        const client = yield* CodexClient.CodexAppServerClient;
+        const initialized = yield* client.request("initialize", {
+          clientInfo: {
+            name: "effect-codex-app-server-test",
+            title: "Effect Codex App Server Test",
+            version: "0.0.0",
+          },
+          capabilities: {
+            experimentalApi: true,
+            optOutNotificationMethods: null,
+          },
+        });
+        assert.equal(initialized.userAgent, "mock-codex-app-server");
+        yield* client.close;
+      }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+      const exitCode = yield* handle.exitCode.pipe(Effect.timeout("5 seconds"));
+      assert.equal(exitCode, ChildProcessSpawner.ExitCode(0));
+      assert.isFalse(yield* handle.isRunning);
+    }),
+  );
 });
