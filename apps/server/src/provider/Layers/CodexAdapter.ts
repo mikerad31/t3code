@@ -1952,6 +1952,25 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       })),
     );
 
+  const forkThread: NonNullable<CodexAdapterShape["forkThread"]> = (threadId, lastTurnId) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => {
+        const fork = session.runtime.forkThread;
+        if (fork === undefined) {
+          return Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "thread/fork",
+              issue: "Codex session runtime does not expose thread/fork.",
+            }),
+          );
+        }
+        return fork(lastTurnId).pipe(
+          Effect.mapError((cause) => mapCodexRuntimeError(threadId, "thread/fork", cause)),
+        );
+      }),
+    );
+
   const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
     if (!Number.isInteger(numTurns) || numTurns < 1) {
       return Effect.fail(
@@ -2094,6 +2113,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     sendTurn,
     interruptTurn,
     readThread,
+    forkThread,
     rollbackThread,
     uploadFeedback,
     respondToRequest,

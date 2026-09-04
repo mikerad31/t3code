@@ -1315,6 +1315,7 @@ function ChatViewContent(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const branchThread = useAtomCommand(serverEnvironment.threadBranch, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1499,6 +1500,7 @@ function ChatViewContent(props: ChatViewProps) {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
+  const [branchingTurnId, setBranchingTurnId] = useState<TurnId | null>(null);
 
   useEffect(() => {
     setIsWorkspaceFileDragActive(false);
@@ -2953,6 +2955,75 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const canBranchInNewChat =
+    isServerThread &&
+    !isWorking &&
+    activeThread !== undefined &&
+    activeProviderStatus?.driver === "codex";
+  const hasHistoricalBranchableMessages =
+    canBranchInNewChat &&
+    activeThread?.messages.some(
+      (message) => message.role === "assistant" && message.turnId === null && !message.streaming,
+    ) === true;
+  const branchBoundariesQuery = useEnvironmentQuery(
+    hasHistoricalBranchableMessages && activeThread !== undefined
+      ? serverEnvironment.threadBranchBoundaries({
+          environmentId: activeThread.environmentId,
+          input: { threadId: activeThread.id },
+        })
+      : null,
+  );
+  const historicalBranchTurnIds = useMemo(
+    () =>
+      new Map(
+        (branchBoundariesQuery.data?.boundaries ?? []).map(
+          ({ messageId, turnId }) => [messageId, turnId] as const,
+        ),
+      ),
+    [branchBoundariesQuery.data],
+  );
+  const handleBranchInNewChat = useCallback(
+    async ({ messageId, turnId }: { readonly messageId: MessageId; readonly turnId: TurnId }) => {
+      const sourceThread = activeThread;
+      if (!canBranchInNewChat || sourceThread === undefined || branchingTurnId !== null) {
+        return;
+      }
+      setBranchingTurnId(turnId);
+      try {
+        const result = await branchThread({
+          environmentId: sourceThread.environmentId,
+          input: {
+            threadId: sourceThread.id,
+            messageId,
+            lastTurnId: turnId,
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not branch this conversation",
+                description: error instanceof Error ? error.message : "Native Codex fork failed.",
+              }),
+            );
+          }
+          return;
+        }
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: sourceThread.environmentId,
+            threadId: result.value.threadId,
+          },
+        });
+      } finally {
+        setBranchingTurnId(null);
+      }
+    },
+    [activeThread, branchThread, branchingTurnId, canBranchInNewChat, navigate],
+  );
   const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
     useLocalStorage(
       `t3code:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
@@ -7249,6 +7320,9 @@ function ChatViewContent(props: ChatViewProps) {
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+                onBranchInNewChat={canBranchInNewChat ? handleBranchInNewChat : undefined}
+                branchableTurnIdByMessageId={historicalBranchTurnIds}
+                branchingTurnId={branchingTurnId}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
                 contentInsetEndAdjustment={composerOverlayHeight}

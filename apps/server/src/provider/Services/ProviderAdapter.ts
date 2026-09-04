@@ -44,6 +44,24 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+/** Provider-native fork result returned by adapters that support branching. */
+export interface ProviderThreadForkSnapshot {
+  readonly threadId: string;
+  readonly forkedFromId: string | null;
+  readonly cwd: string;
+  readonly model: string;
+  readonly modelProvider: string;
+  readonly reasoningEffort: string | null;
+  readonly turns: ReadonlyArray<{
+    readonly id: TurnId;
+    readonly items: ReadonlyArray<unknown>;
+    readonly startedAt: number | null;
+    readonly completedAt: number | null;
+    readonly status: string;
+    readonly error: { readonly message: string } | null;
+  }>;
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -115,6 +133,16 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /**
+   * Fork a provider-native thread through an inclusive completed turn. The
+   * adapter must preserve the native thread identity and never fall back to a
+   * fresh conversation.
+   */
+  readonly forkThread?: (
+    threadId: ThreadId,
+    lastTurnId: TurnId,
+  ) => Effect.Effect<ProviderThreadForkSnapshot, TError>;
 
   /**
    * Upload a thread to the provider when the adapter supports feedback.

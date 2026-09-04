@@ -1661,6 +1661,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.threadImportsCommit, threadImports.commit(input), {
             "rpc.aggregate": "thread-import",
           }),
+        [WS_METHODS.threadBranchBoundaries]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadBranchBoundaries,
+            threadImports.branchBoundaries(input),
+            {
+              "rpc.aggregate": "thread-branch-boundaries",
+            },
+          ),
+        [WS_METHODS.threadBranch]: (input) =>
+          observeRpcEffect(WS_METHODS.threadBranch, threadImports.branch(input), {
+            "rpc.aggregate": "thread-branch",
+          }),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

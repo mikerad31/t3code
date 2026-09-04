@@ -24,6 +24,7 @@ import type {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
   ThreadId,
+  TurnId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -32,6 +33,8 @@ import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type { ProviderThreadForkSnapshot } from "./ProviderAdapter.ts";
+import type { ProviderThreadSnapshot } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 import type { ProviderRuntimeBinding } from "./ProviderSessionDirectory.ts";
 
@@ -111,6 +114,11 @@ export interface ProviderServiceShape {
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
 
+  /** Read the provider-native thread history for compatibility mapping. */
+  readonly readThread?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ProviderThreadSnapshot, ProviderServiceError>;
+
   /**
    * Roll back provider conversation state by a number of turns.
    */
@@ -118,6 +126,12 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /** Fork a Codex-native thread through an inclusive completed turn. */
+  readonly forkThread?: (input: {
+    readonly threadId: ThreadId;
+    readonly lastTurnId: TurnId;
+  }) => Effect.Effect<ProviderThreadForkSnapshot, ProviderServiceError>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

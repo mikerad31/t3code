@@ -89,6 +89,10 @@ import {
   ThreadImportError,
   ThreadImportScanInput,
   ThreadImportScanResult,
+  ThreadBranchInput,
+  ThreadBranchBoundariesInput,
+  ThreadBranchBoundariesResult,
+  ThreadBranchResult,
 } from "./threadImports.ts";
 import {
   PullRequestActionInput,
@@ -243,6 +247,8 @@ export const WS_METHODS = {
   // Thread import methods
   threadImportsScan: "threadImports.scan",
   threadImportsCommit: "threadImports.commit",
+  threadBranchBoundaries: "thread.branchBoundaries",
+  threadBranch: "thread.branch",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -726,6 +732,17 @@ export const WsThreadImportsCommitRpc = Rpc.make(WS_METHODS.threadImportsCommit,
   success: ThreadImportCommitResult,
   error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
 });
+
+export const WsThreadBranchRpc = Rpc.make(WS_METHODS.threadBranch, {
+  payload: ThreadBranchInput,
+  success: ThreadBranchResult,
+  error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
+});
+export const WsThreadBranchBoundariesRpc = Rpc.make(WS_METHODS.threadBranchBoundaries, {
+  payload: ThreadBranchBoundariesInput,
+  success: ThreadBranchBoundariesResult,
+  error: Schema.Union([ThreadImportError, EnvironmentAuthorizationError]),
+});
 export const WsProviderConsumeRateLimitResetCreditRpc = Rpc.make(
   WS_METHODS.providerConsumeRateLimitResetCredit,
   {
@@ -1118,6 +1135,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderUploadFeedbackRpc,
   WsThreadImportsScanRpc,
   WsThreadImportsCommitRpc,
+  WsThreadBranchBoundariesRpc,
+  WsThreadBranchRpc,
   WsProviderConsumeRateLimitResetCreditRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,

@@ -20,6 +20,7 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
+  TurnId,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -52,7 +53,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type { ProviderAdapterShape, ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -149,6 +150,15 @@ export const makeThreadLockManager = Effect.fn("makeThreadLockManager")(function
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
   numTurns: NonNegativeInt,
+});
+
+const ProviderForkThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  lastTurnId: TurnId,
+});
+
+const ProviderReadThreadInput = Schema.Struct({
+  threadId: ThreadId,
 });
 
 function toValidationError(
@@ -1503,6 +1513,119 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
+  const readThread: NonNullable<ProviderServiceMethod<"readThread">> = Effect.fn(
+    "ProviderService.readThread",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.readThread",
+      schema: ProviderReadThreadInput,
+      payload: rawInput,
+    });
+
+    return yield* withSessionLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.readThread",
+          allowRecovery: true,
+        });
+        if (!routed.isActive) {
+          return yield* toValidationError(
+            "ProviderService.readThread",
+            `Cannot read thread '${input.threadId}' because its provider session is not active.`,
+          );
+        }
+        yield* Effect.annotateCurrentSpan({
+          "provider.operation": "read-thread",
+          "provider.kind": routed.adapter.provider,
+          "provider.instance_id": routed.instanceId,
+          "provider.thread_id": input.threadId,
+        });
+        return yield* routed.adapter.readThread(input.threadId);
+      }),
+    );
+  });
+
+  const forkThread: NonNullable<ProviderServiceMethod<"forkThread">> = Effect.fn(
+    "ProviderService.forkThread",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.forkThread",
+      schema: ProviderForkThreadInput,
+      payload: rawInput,
+    });
+
+    return yield* withSessionLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.forkThread",
+          // A stopped idle source can be resumed to perform the native fork;
+          // recovery itself is serialized by this same thread/routing lock.
+          allowRecovery: true,
+        });
+        if (!routed.isActive) {
+          return yield* toValidationError(
+            "ProviderService.forkThread",
+            `Cannot fork thread '${input.threadId}' because its provider session is not active.`,
+          );
+        }
+
+        const sessions = yield* routed.adapter.listSessions();
+        const session = sessions.find((candidate) => candidate.threadId === input.threadId);
+        if (session === undefined) {
+          return yield* toValidationError(
+            "ProviderService.forkThread",
+            `Provider instance '${routed.instanceId}' retains an ambiguous session for thread '${input.threadId}'.`,
+          );
+        }
+
+        // The live adapter session is authoritative. A ready/terminal-error
+        // session with no active turn is idle even if terminal reconciliation
+        // has not yet cleared the persisted projection payload.
+        const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+        const persistedActiveTurnId = readPersistedActiveTurnId(persistedBinding?.runtimePayload);
+        const terminalSession = session.status === "ready" || session.status === "error";
+        if (session.activeTurnId !== undefined || !terminalSession) {
+          return yield* toValidationError(
+            "ProviderService.forkThread",
+            `Provider instance '${routed.instanceId}' must be idle before forking thread '${input.threadId}'.`,
+          );
+        }
+        if (persistedActiveTurnId !== undefined && persistedActiveTurnId !== null) {
+          yield* directory.upsert({
+            threadId: input.threadId,
+            provider: routed.adapter.provider,
+            providerInstanceId: routed.instanceId,
+            runtimePayload: {
+              activeTurnId: null,
+              lastRuntimeEvent: "codex.fork.terminal-reconciled",
+            },
+          });
+        }
+
+        const fork = routed.adapter.forkThread;
+        if (fork === undefined) {
+          return yield* toValidationError(
+            "ProviderService.forkThread",
+            `Provider '${routed.adapter.provider}' does not support native thread forks.`,
+          );
+        }
+
+        yield* Effect.annotateCurrentSpan({
+          "provider.operation": "thread-fork",
+          "provider.kind": routed.adapter.provider,
+          "provider.instance_id": routed.instanceId,
+          "provider.thread_id": input.threadId,
+          "provider.last_turn_id": input.lastTurnId,
+        });
+        return yield* fork(input.threadId, input.lastTurnId);
+      }),
+    );
+  });
+
   const rollbackConversation: ProviderServiceMethod<"rollbackConversation"> = Effect.fn(
     "rollbackConversation",
   )(function* (rawInput) {
@@ -1664,6 +1787,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     getCapabilities,
     getInstanceInfo,
+    readThread,
+    forkThread,
     rollbackConversation,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple

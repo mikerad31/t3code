@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
-import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
+import { DEFAULT_MODEL, ThreadId, TurnId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -17,6 +17,7 @@ import {
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  buildThreadForkParams,
   CodexSessionRuntimeWriterReleaseUnprovenError,
   CodexSessionRuntimeThreadIdMismatchError,
   describeMcpElicitation,
@@ -798,6 +799,18 @@ describe("codexSessionAppServerArgs", () => {
         "-c",
         "mcp_servers.t3-code.url=http://127.0.0.1/mcp",
       ],
+    );
+  });
+});
+
+describe("buildThreadForkParams", () => {
+  it("uses the native source id and inclusive last-turn boundary", () => {
+    NodeAssert.deepStrictEqual(
+      buildThreadForkParams("native-source-thread", TurnId.make("native-boundary-turn")),
+      {
+        threadId: "native-source-thread",
+        lastTurnId: "native-boundary-turn",
+      },
     );
   });
 });

@@ -50,6 +50,14 @@ const decodeV2ThreadResumeResponse = Schema.decodeUnknownEffect(
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
+export const buildThreadForkParams = (
+  threadId: string,
+  lastTurnId: TurnId,
+): CodexRpc.ClientRequestParamsByMethod["thread/fork"] => ({
+  threadId,
+  lastTurnId,
+});
+
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
 const CODEX_STDERR_LOG_REGEX =
@@ -189,6 +197,23 @@ export interface CodexThreadSnapshot {
   readonly turns: ReadonlyArray<CodexThreadTurnSnapshot>;
 }
 
+export interface CodexThreadForkSnapshot {
+  readonly threadId: string;
+  readonly forkedFromId: string | null;
+  readonly cwd: string;
+  readonly model: string;
+  readonly modelProvider: string;
+  readonly reasoningEffort: string | null;
+  readonly turns: ReadonlyArray<{
+    readonly id: TurnId;
+    readonly items: ReadonlyArray<EffectCodexSchema.V2ThreadForkResponse__ThreadItem>;
+    readonly startedAt: number | null;
+    readonly completedAt: number | null;
+    readonly status: EffectCodexSchema.V2ThreadForkResponse__TurnStatus;
+    readonly error: { readonly message: string } | null;
+  }>;
+}
+
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
@@ -200,6 +225,9 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  readonly forkThread?: (
+    lastTurnId: TurnId,
+  ) => Effect.Effect<CodexThreadForkSnapshot, CodexSessionRuntimeError>;
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
@@ -2543,6 +2571,30 @@ export const makeCodexSessionRuntime = (
         });
         return parseThreadSnapshot(response);
       }),
+      forkThread: (lastTurnId) =>
+        Effect.gen(function* () {
+          const providerThreadId = yield* readProviderThreadId;
+          const response = yield* client.request(
+            "thread/fork",
+            buildThreadForkParams(providerThreadId, lastTurnId),
+          );
+          return {
+            threadId: response.thread.id,
+            forkedFromId: response.thread.forkedFromId ?? null,
+            cwd: response.cwd,
+            model: response.model,
+            modelProvider: response.modelProvider,
+            reasoningEffort: response.reasoningEffort ?? null,
+            turns: response.thread.turns.map((turn) => ({
+              id: TurnId.make(turn.id),
+              items: turn.items,
+              startedAt: turn.startedAt ?? null,
+              completedAt: turn.completedAt ?? null,
+              status: turn.status,
+              error: turn.error ? { message: turn.error.message } : null,
+            })),
+          } satisfies CodexThreadForkSnapshot;
+        }),
       rollbackThread: (numTurns) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

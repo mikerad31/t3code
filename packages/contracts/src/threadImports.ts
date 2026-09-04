@@ -12,6 +12,7 @@ import {
   MessageId,
   NonNegativeInt,
   ProjectId,
+  TurnId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -99,6 +100,9 @@ export const ThreadImportErrorCode = Schema.Literals([
   "source-unavailable",
   "transcript-unreadable",
   "import-failed",
+  "thread-not-found",
+  "turn-not-forkable",
+  "fork-failed",
 ]);
 export type ThreadImportErrorCode = typeof ThreadImportErrorCode.Type;
 
@@ -109,3 +113,36 @@ export class ThreadImportError extends Schema.TaggedErrorClass<ThreadImportError
     message: TrimmedNonEmptyString,
   },
 ) {}
+
+/** Branch one completed native Codex turn into a new T3 conversation. */
+export const ThreadBranchInput = Schema.Struct({
+  threadId: ThreadId,
+  /** T3 message whose native assistant response is being branched. */
+  messageId: MessageId,
+  /** Native Codex turn id; the fork boundary is inclusive. */
+  lastTurnId: TurnId,
+});
+export type ThreadBranchInput = typeof ThreadBranchInput.Type;
+
+export const ThreadBranchBoundary = Schema.Struct({
+  messageId: MessageId,
+  turnId: TurnId,
+});
+export type ThreadBranchBoundary = typeof ThreadBranchBoundary.Type;
+
+export const ThreadBranchBoundariesInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ThreadBranchBoundariesInput = typeof ThreadBranchBoundariesInput.Type;
+
+export const ThreadBranchBoundariesResult = Schema.Struct({
+  boundaries: Schema.Array(ThreadBranchBoundary),
+});
+export type ThreadBranchBoundariesResult = typeof ThreadBranchBoundariesResult.Type;
+
+export const ThreadBranchResult = Schema.Struct({
+  threadId: ThreadId,
+  nativeThreadId: TrimmedNonEmptyString,
+  forkedFromId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ThreadBranchResult = typeof ThreadBranchResult.Type;

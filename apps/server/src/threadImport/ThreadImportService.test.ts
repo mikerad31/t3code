@@ -1,9 +1,13 @@
 import {
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
+  type OrchestrationThread,
   type OrchestrationReadModel,
   type OrchestrationThreadShell,
   type ServerProvider,
@@ -30,6 +34,10 @@ import type {
   ProviderRuntimeBinding,
   ProviderSessionDirectory,
 } from "../provider/Services/ProviderSessionDirectory.ts";
+import type {
+  ProviderThreadForkSnapshot,
+  ProviderThreadSnapshot,
+} from "../provider/Services/ProviderAdapter.ts";
 import { makeThreadImportService } from "./ThreadImportService.ts";
 
 const projectId = ProjectId.make("project-import-test");
@@ -109,13 +117,18 @@ function makeHarness(options: {
   readonly candidates: ReadonlyArray<ProviderThreadImportCandidate>;
   readonly scan?: ProviderThreadImportShape["scan"];
   readonly read: ProviderThreadImportShape["read"];
+  readonly readNativeThread?: ProviderThreadImportShape["readNativeThread"];
   readonly sessionUpsert?: ProviderSessionDirectory["Service"]["upsert"];
   readonly providers?: ReadonlyArray<ProviderInstance>;
   readonly project?: OrchestrationProjectShell;
+  readonly threadDetail?: OrchestrationThread;
+  readonly initialBindings?: ReadonlyArray<ProviderRuntimeBinding>;
+  readonly forkThread?: NonNullable<ProviderService["Service"]["forkThread"]>;
+  readonly readThread?: NonNullable<ProviderService["Service"]["readThread"]>;
 }) {
   let importedThread: OrchestrationThreadShell | null = null;
   const commands: OrchestrationCommand[] = [];
-  const bindings: ProviderRuntimeBinding[] = [];
+  const bindings: ProviderRuntimeBinding[] = [...(options.initialBindings ?? [])];
 
   const projection = {
     getProjectShellById: () => Effect.succeed(Option.some(options.project ?? project)),
@@ -128,6 +141,10 @@ function makeHarness(options: {
         importedThread !== null && String(importedThread.id) === String(threadId)
           ? Option.some(importedThread)
           : Option.none(),
+      ),
+    getThreadDetailById: () =>
+      Effect.succeed(
+        options.threadDetail === undefined ? Option.none() : Option.some(options.threadDetail),
       ),
   } as unknown as ProjectionSnapshotQuery["Service"];
 
@@ -158,6 +175,9 @@ function makeHarness(options: {
   const provider = makeProvider({
     scan: options.scan ?? (() => Effect.succeed(options.candidates)),
     read: options.read,
+    ...(options.readNativeThread === undefined
+      ? {}
+      : { readNativeThread: options.readNativeThread }),
   });
   const providerInstances = {
     getInstance: () => Effect.succeed(provider),
@@ -191,7 +211,11 @@ function makeHarness(options: {
     binding,
     afterBindingCommit,
   ) => providerSessions.upsert(binding).pipe(Effect.andThen(afterBindingCommit));
-  const providerService = { reconcileSessionBinding } as ProviderService["Service"];
+  const providerService = {
+    reconcileSessionBinding,
+    ...(options.readThread === undefined ? {} : { readThread: options.readThread }),
+    ...(options.forkThread === undefined ? {} : { forkThread: options.forkThread }),
+  } as ProviderService["Service"];
 
   return {
     service: makeThreadImportService({
@@ -584,6 +608,649 @@ describe("ThreadImportService", () => {
         importedMessageCount: 0,
       });
       expect(result.results[0]?.error).toContain("no readable user or assistant messages");
+      expect(harness.commands).toHaveLength(0);
+    }),
+  );
+
+  it.effect("branches through the selected native turn without cloning later history", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-source");
+      const firstTurnId = TurnId.make("native-turn-1");
+      const selectedTurnId = TurnId.make("native-turn-2");
+      const laterTurnId = TurnId.make("native-turn-3");
+      const sourceNativeThreadId = "native-parent-thread";
+      const childNativeThreadId = "native-child-thread";
+      const modelSelection = {
+        instanceId,
+        model: "gpt-5.6-codex",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      } as const;
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Keep the source title",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/source",
+        worktreePath: "/workspace/project",
+        latestTurn: {
+          turnId: selectedTurnId,
+          state: "completed",
+          requestedAt: "2026-08-20T10:00:00.000Z",
+          startedAt: "2026-08-20T10:00:01.000Z",
+          completedAt: "2026-08-20T10:00:02.000Z",
+          assistantMessageId: MessageId.make("source-assistant-2"),
+        },
+        messages: [
+          {
+            id: MessageId.make("source-user-1"),
+            role: "user",
+            text: "First prompt",
+            turnId: firstTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+          {
+            id: MessageId.make("source-assistant-1"),
+            role: "assistant",
+            text: "First answer",
+            turnId: firstTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+          {
+            id: MessageId.make("source-user-2"),
+            role: "user",
+            text: "Selected prompt",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:02.000Z",
+            updatedAt: "2026-08-20T10:00:02.000Z",
+          },
+          {
+            id: MessageId.make("source-assistant-2"),
+            role: "assistant",
+            text: "Selected answer",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:02.000Z",
+            updatedAt: "2026-08-20T10:00:02.000Z",
+          },
+          {
+            id: MessageId.make("source-user-3"),
+            role: "user",
+            text: "Later source prompt",
+            turnId: laterTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:03.000Z",
+            updatedAt: "2026-08-20T10:00:03.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const forked = {
+        threadId: childNativeThreadId,
+        forkedFromId: sourceNativeThreadId,
+        cwd: "/workspace/project",
+        model: modelSelection.model,
+        modelProvider: "openai",
+        reasoningEffort: "high",
+        turns: [
+          {
+            id: firstTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "First prompt" }],
+              },
+              { type: "agentMessage", text: "First answer" },
+            ],
+            startedAt: 1_755_667_201,
+            completedAt: 1_755_667_201,
+            status: "completed",
+            error: null,
+          },
+          {
+            id: selectedTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Selected prompt" }],
+              },
+              { type: "agentMessage", text: "Selected answer" },
+            ],
+            startedAt: 1_755_667_202,
+            completedAt: 1_755_667_202,
+            status: "completed",
+            error: null,
+          },
+          {
+            id: laterTurnId,
+            items: [{ type: "agentMessage", text: "Must stay out of the child" }],
+            startedAt: 1_755_667_203,
+            completedAt: 1_755_667_203,
+            status: "completed",
+            error: null,
+          },
+        ],
+      } satisfies ProviderThreadForkSnapshot;
+      const forkCalls: Array<{ threadId: ThreadId; lastTurnId: TurnId }> = [];
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: sourceNativeThreadId },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: "/workspace/project", modelSelection },
+      };
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        forkThread: (input) =>
+          Effect.sync(() => {
+            forkCalls.push(input);
+            return forked;
+          }),
+      });
+
+      const result = yield* harness.service.branch({
+        threadId: sourceThreadId,
+        messageId: MessageId.make("source-assistant-2"),
+        lastTurnId: selectedTurnId,
+      });
+
+      expect(forkCalls).toEqual([{ threadId: sourceThreadId, lastTurnId: selectedTurnId }]);
+      expect(result.nativeThreadId).toBe(childNativeThreadId);
+      expect(result.nativeThreadId).not.toBe(sourceNativeThreadId);
+      expect(harness.commands).toHaveLength(1);
+      const command = harness.commands[0]!;
+      expect(command.type).toBe("thread.import");
+      if (command.type !== "thread.import") throw new Error("expected branch import command");
+      expect(command.projectId).toBe(projectId);
+      expect(command.title).toBe(sourceDetail.title);
+      expect(command.branch).toBe(sourceDetail.branch);
+      expect(command.worktreePath).toBe(sourceDetail.worktreePath);
+      expect(command.modelSelection).toEqual(modelSelection);
+      expect(command.messages.map((message) => message.text)).toEqual([
+        "First prompt",
+        "First answer",
+        "Selected prompt",
+        "Selected answer",
+      ]);
+      expect(command.messages.every((message) => message.turnId !== laterTurnId)).toBe(true);
+      expect(harness.bindings).toContainEqual(sourceBinding);
+      expect(harness.bindings.at(-1)).toMatchObject({
+        threadId: command.threadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        resumeCursor: { threadId: childNativeThreadId },
+        runtimePayload: {
+          cwd: "/workspace/project",
+          modelSelection,
+          forkedFromId: sourceNativeThreadId,
+          reasoningEffort: "high",
+        },
+      });
+    }),
+  );
+
+  it.effect("leaves the parent usable when native fork creation fails", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-failure-source");
+      const selectedTurnId = TurnId.make("native-turn-failure-boundary");
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Source remains available",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: { turnId: selectedTurnId, state: "completed" },
+        messages: [
+          {
+            id: MessageId.make("source-assistant-failure"),
+            role: "assistant",
+            text: "Completed before the fork failed",
+            turnId: selectedTurnId,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:00.000Z",
+            updatedAt: "2026-08-20T10:00:00.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-failure-parent" },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        forkThread: () =>
+          Effect.fail(
+            new ProviderValidationError({
+              operation: "ProviderService.forkThread",
+              issue: "Codex fork request failed",
+            }),
+          ),
+      });
+
+      const failure = yield* harness.service
+        .branch({
+          threadId: sourceThreadId,
+          messageId: MessageId.make("source-assistant-failure"),
+          lastTurnId: selectedTurnId,
+        })
+        .pipe(Effect.flip);
+
+      expect(failure.code).toBe("fork-failed");
+      expect(failure.message).toContain("Codex fork request failed");
+      expect(harness.commands).toHaveLength(0);
+      expect(harness.bindings).toEqual([sourceBinding]);
+    }),
+  );
+
+  it.effect("recovers exact native boundaries for historical projections", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-historical-source");
+      const firstTurnId = TurnId.make("native-historical-turn-1");
+      const selectedTurnId = TurnId.make("native-historical-turn-2");
+      const laterTurnId = TurnId.make("native-historical-turn-3");
+      const selectedMessageId = MessageId.make("historical-assistant-2");
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Historical source",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        messages: [
+          {
+            id: MessageId.make("historical-user-1"),
+            role: "user",
+            text: "First historical prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:00.000Z",
+            updatedAt: "2026-08-20T10:00:00.000Z",
+          },
+          {
+            id: MessageId.make("historical-assistant-1"),
+            role: "assistant",
+            text: "First historical answer",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+          {
+            id: MessageId.make("historical-user-2"),
+            role: "user",
+            text: "Selected historical prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:02.000Z",
+            updatedAt: "2026-08-20T10:00:02.000Z",
+          },
+          {
+            id: selectedMessageId,
+            role: "assistant",
+            text: "Selected historical answer",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:03.000Z",
+            updatedAt: "2026-08-20T10:00:03.000Z",
+          },
+          {
+            id: MessageId.make("historical-user-3"),
+            role: "user",
+            text: "Later historical prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:04.000Z",
+            updatedAt: "2026-08-20T10:00:04.000Z",
+          },
+          {
+            id: MessageId.make("historical-assistant-3"),
+            role: "assistant",
+            text: "Later historical answer",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:05.000Z",
+            updatedAt: "2026-08-20T10:00:05.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const native = {
+        threadId: ThreadId.make("native-historical-source"),
+        turns: [
+          {
+            id: firstTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "First historical prompt" }],
+              },
+              { type: "agentMessage", text: "First historical answer" },
+            ],
+          },
+          {
+            id: selectedTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Selected historical prompt" }],
+              },
+              { type: "agentMessage", text: "Selected historical answer" },
+            ],
+          },
+          {
+            id: laterTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Later historical prompt" }],
+              },
+              { type: "agentMessage", text: "Later historical answer" },
+            ],
+          },
+        ],
+      } satisfies ProviderThreadSnapshot;
+      const forked = {
+        threadId: "native-historical-child",
+        forkedFromId: "native-historical-source",
+        cwd: project.workspaceRoot,
+        model: "gpt-5.6-codex",
+        modelProvider: "openai",
+        reasoningEffort: null,
+        turns: native.turns.slice(0, 2).map((turn, index) => ({
+          ...turn,
+          startedAt: index + 1,
+          completedAt: index + 1,
+          status: "completed",
+          error: null,
+        })),
+      } satisfies ProviderThreadForkSnapshot;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-historical-source" },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      const forkCalls: Array<{ threadId: ThreadId; lastTurnId: TurnId }> = [];
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        readThread: () => Effect.succeed(native),
+        forkThread: (input) =>
+          Effect.sync(() => {
+            forkCalls.push(input);
+            return forked;
+          }),
+      });
+
+      const boundaries = yield* harness.service.branchBoundaries({ threadId: sourceThreadId });
+      expect(boundaries.boundaries).toEqual([
+        { messageId: MessageId.make("historical-assistant-1"), turnId: firstTurnId },
+        { messageId: selectedMessageId, turnId: selectedTurnId },
+        { messageId: MessageId.make("historical-assistant-3"), turnId: laterTurnId },
+      ]);
+
+      const result = yield* harness.service.branch({
+        threadId: sourceThreadId,
+        messageId: selectedMessageId,
+        lastTurnId: selectedTurnId,
+      });
+      expect(result.nativeThreadId).toBe("native-historical-child");
+      expect(forkCalls).toEqual([{ threadId: sourceThreadId, lastTurnId: selectedTurnId }]);
+      const command = harness.commands[0]!;
+      if (command.type !== "thread.import") throw new Error("expected branch import command");
+      expect(command.messages.map((message) => message.text)).toEqual([
+        "First historical prompt",
+        "First historical answer",
+        "Selected historical prompt",
+        "Selected historical answer",
+      ]);
+    }),
+  );
+
+  it.effect("recovers imported rows when timestamp ties reorder native assistant items", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-imported-order-source");
+      const nativeThreadId = ThreadId.make("native-imported-order-source");
+      const nativeTurnId = TurnId.make("native-imported-order-turn");
+      const tiedTimestamp = "2026-08-20T10:00:00.000Z";
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Imported Codex source",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        // This is the historical projection shape: imported rows have no
+        // turn ids and a single import timestamp. The message-id tie-breaker
+        // puts the assistant rows in a different order than native items.
+        messages: [
+          {
+            id: MessageId.make("imported-message:prompt"),
+            role: "user",
+            text: "Historical prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:01-second"),
+            role: "assistant",
+            text: "Second native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:02-first"),
+            role: "assistant",
+            text: "First native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+          {
+            id: MessageId.make("imported-message:03-third"),
+            role: "assistant",
+            text: "Third native response",
+            turnId: null,
+            streaming: false,
+            createdAt: tiedTimestamp,
+            updatedAt: tiedTimestamp,
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const native = {
+        threadId: nativeThreadId,
+        turns: [
+          {
+            id: nativeTurnId,
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Historical prompt" }],
+              },
+              { type: "reasoning", summary: [] },
+              { type: "agentMessage", text: "First native response" },
+              { type: "commandExecution", command: "echo activity" },
+              { type: "agentMessage", text: "Second native response" },
+              { type: "agentMessage", text: "Third native response" },
+            ],
+          },
+        ],
+      } satisfies ProviderThreadSnapshot;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: nativeThreadId },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      let legacyReadCalled = false;
+      let nativeReadInput: { projectRoot: string; externalThreadId: string } | undefined;
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        readNativeThread: (input) =>
+          Effect.sync(() => {
+            nativeReadInput = input;
+            return native;
+          }),
+        readThread: () =>
+          Effect.sync(() => {
+            legacyReadCalled = true;
+            return native;
+          }),
+      });
+
+      const boundaries = yield* harness.service.branchBoundaries({ threadId: sourceThreadId });
+      expect(nativeReadInput).toEqual({
+        projectRoot: project.workspaceRoot,
+        externalThreadId: String(nativeThreadId),
+      });
+      expect(legacyReadCalled).toBe(false);
+      expect(boundaries.boundaries).toEqual([
+        {
+          messageId: MessageId.make("imported-message:01-second"),
+          turnId: nativeTurnId,
+        },
+        {
+          messageId: MessageId.make("imported-message:02-first"),
+          turnId: nativeTurnId,
+        },
+        {
+          messageId: MessageId.make("imported-message:03-third"),
+          turnId: nativeTurnId,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("hides historical branch actions when native history is ambiguous", () =>
+    Effect.gen(function* () {
+      const sourceThreadId = ThreadId.make("thread-branch-ambiguous-source");
+      const assistantMessageId = MessageId.make("ambiguous-assistant");
+      const sourceDetail = {
+        id: sourceThreadId,
+        projectId,
+        title: "Ambiguous historical source",
+        modelSelection: { instanceId, model: "gpt-5.6-codex" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        messages: [
+          {
+            id: MessageId.make("ambiguous-user"),
+            role: "user",
+            text: "Repeated prompt",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:00.000Z",
+            updatedAt: "2026-08-20T10:00:00.000Z",
+          },
+          {
+            id: assistantMessageId,
+            role: "assistant",
+            text: "Repeated answer",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-08-20T10:00:01.000Z",
+            updatedAt: "2026-08-20T10:00:01.000Z",
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      const native = {
+        threadId: ThreadId.make("native-ambiguous-source"),
+        turns: [
+          {
+            id: TurnId.make("ambiguous-turn-1"),
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Repeated prompt" }],
+              },
+              { type: "agentMessage", text: "Repeated answer" },
+            ],
+          },
+          {
+            id: TurnId.make("ambiguous-turn-2"),
+            items: [
+              {
+                type: "userMessage",
+                content: [{ type: "text", text: "Repeated prompt" }],
+              },
+              { type: "agentMessage", text: "Repeated answer" },
+            ],
+          },
+        ],
+      } satisfies ProviderThreadSnapshot;
+      const sourceBinding: ProviderRuntimeBinding = {
+        threadId: sourceThreadId,
+        provider: driverKind,
+        providerInstanceId: instanceId,
+        status: "stopped",
+        resumeCursor: { threadId: "native-ambiguous-source" },
+        runtimeMode: "full-access",
+        runtimePayload: { cwd: project.workspaceRoot },
+      };
+      const harness = makeHarness({
+        candidates: [],
+        read: () => Effect.succeed(sourceTranscript()),
+        threadDetail: sourceDetail,
+        initialBindings: [sourceBinding],
+        readThread: () => Effect.succeed(native),
+        forkThread: () => Effect.die("a fork must not run for an ambiguous boundary"),
+      });
+
+      const boundaries = yield* harness.service.branchBoundaries({ threadId: sourceThreadId });
+      expect(boundaries.boundaries).toEqual([]);
+      const failure = yield* harness.service
+        .branch({
+          threadId: sourceThreadId,
+          messageId: assistantMessageId,
+          lastTurnId: TurnId.make("ambiguous-turn-1"),
+        })
+        .pipe(Effect.flip);
+      expect(failure.code).toBe("turn-not-forkable");
       expect(harness.commands).toHaveLength(0);
     }),
   );

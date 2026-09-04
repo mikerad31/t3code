@@ -1,5 +1,6 @@
 import * as Data from "effect/Data";
 import type * as Effect from "effect/Effect";
+import type { TurnId } from "@t3tools/contracts";
 
 export interface ProviderThreadImportCandidate {
   readonly externalThreadId: string;
@@ -31,6 +32,14 @@ export interface ProviderThreadImportTranscript {
   readonly warnings: ReadonlyArray<string>;
 }
 
+export interface ProviderThreadImportNativeThread {
+  readonly threadId: string;
+  readonly turns: ReadonlyArray<{
+    readonly id: TurnId;
+    readonly items: ReadonlyArray<unknown>;
+  }>;
+}
+
 export class ProviderThreadImportError extends Data.TaggedError("ProviderThreadImportError")<{
   readonly operation: "scan" | "read";
   readonly detail: string;
@@ -52,4 +61,13 @@ export interface ProviderThreadImportShape {
     readonly externalThreadId: string;
     readonly archived: boolean;
   }) => Effect.Effect<ProviderThreadImportTranscript, ProviderThreadImportError>;
+  /**
+   * Read native turns without recovering or opening a T3 provider session.
+   * This is intentionally separate from `read`: transcript imports may use a
+   * rollout fallback, while branch boundaries require exact native turn IDs.
+   */
+  readonly readNativeThread?: (input: {
+    readonly projectRoot: string;
+    readonly externalThreadId: string;
+  }) => Effect.Effect<ProviderThreadImportNativeThread, ProviderThreadImportError>;
 }

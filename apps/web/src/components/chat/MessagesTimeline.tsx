@@ -70,8 +70,10 @@ import {
   DownloadIcon,
   EyeIcon,
   FileIcon,
+  GitBranchIcon,
   GlobeIcon,
   HammerIcon,
+  LoaderCircleIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -173,6 +175,11 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  onBranchInNewChat?:
+    | ((input: { readonly messageId: MessageId; readonly turnId: TurnId }) => void)
+    | undefined;
+  branchableTurnIdByMessageId: ReadonlyMap<MessageId, TurnId>;
+  branchingTurnId: TurnId | null;
 }
 
 interface TimelineRowActivityState {
@@ -217,6 +224,7 @@ function TimelineLoadEarlierHeader({
 }
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_BRANCHABLE_TURN_IDS = new Map<MessageId, TurnId>();
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -272,6 +280,11 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  onBranchInNewChat?:
+    | ((input: { readonly messageId: MessageId; readonly turnId: TurnId }) => void)
+    | undefined;
+  branchableTurnIdByMessageId?: ReadonlyMap<MessageId, TurnId> | undefined;
+  branchingTurnId?: TurnId | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +326,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  onBranchInNewChat,
+  branchableTurnIdByMessageId = EMPTY_BRANCHABLE_TURN_IDS,
+  branchingTurnId = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -627,6 +643,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onBranchInNewChat,
+      branchableTurnIdByMessageId,
+      branchingTurnId,
     }),
     [
       timestampFormat,
@@ -646,6 +665,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      onBranchInNewChat,
+      branchableTurnIdByMessageId,
+      branchingTurnId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1335,6 +1357,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            <AssistantBranchButton row={row} />
             <AssistantCopyButton row={row} />
             {!row.message.streaming && (
               <Tooltip>
@@ -1352,6 +1375,41 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantBranchButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const turnId = row.message.turnId ?? ctx.branchableTurnIdByMessageId.get(row.message.id) ?? null;
+  if (!ctx.onBranchInNewChat || !turnId || !row.showAssistantMeta) {
+    return null;
+  }
+
+  const busy = ctx.branchingTurnId !== null;
+  const active = ctx.branchingTurnId === turnId;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            aria-label="Branch in new chat"
+            aria-busy={active || undefined}
+            onClick={() => ctx.onBranchInNewChat?.({ messageId: row.message.id, turnId })}
+          />
+        }
+      >
+        {active ? (
+          <LoaderCircleIcon className="size-3 motion-safe:animate-spin" />
+        ) : (
+          <GitBranchIcon className="size-3" />
+        )}
+      </TooltipTrigger>
+      <TooltipPopup side="top">Branch in new chat</TooltipPopup>
+    </Tooltip>
   );
 }
 
