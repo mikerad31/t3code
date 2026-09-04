@@ -702,6 +702,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.threadImportsScan,
       staleTimeMs: 30_000,
     }),
+    threadBranchBoundaries: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-branch-boundaries",
+      tag: WS_METHODS.threadBranchBoundaries,
+      staleTimeMs: 30_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

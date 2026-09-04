@@ -34,6 +34,7 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderThreadForkSnapshot } from "./ProviderAdapter.ts";
+import type { ProviderThreadSnapshot } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 import type { ProviderRuntimeBinding } from "./ProviderSessionDirectory.ts";
 
@@ -112,6 +113,11 @@ export interface ProviderServiceShape {
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
+
+  /** Read the provider-native thread history for compatibility mapping. */
+  readonly readThread?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ProviderThreadSnapshot, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

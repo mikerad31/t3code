@@ -10,11 +10,14 @@ import {
   ThreadImportCandidateId,
   type ModelSelection,
   type OrchestrationProjectShell,
+  type OrchestrationThread,
   type ProviderInstanceId,
   type ThreadImportCandidate,
   type ThreadImportCommitInput,
   type ThreadImportCommitResult,
   type ThreadImportItemResult,
+  type ThreadBranchBoundariesInput,
+  type ThreadBranchBoundariesResult,
   type ThreadBranchInput,
   type ThreadBranchResult,
   ThreadImportError,
@@ -33,7 +36,10 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import type { ProviderThreadImportShape } from "../provider/ProviderThreadImport.ts";
-import type { ProviderThreadForkSnapshot } from "../provider/Services/ProviderAdapter.ts";
+import type {
+  ProviderThreadForkSnapshot,
+  ProviderThreadSnapshot,
+} from "../provider/Services/ProviderAdapter.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import {
@@ -90,9 +96,64 @@ function nativeItemText(
         ? [contentRecord.text]
         : [];
     })
-    .join("\n")
+    .join("\n\n")
     .trim();
   return text.length > 0 ? { role: "user", text } : null;
+}
+
+function resolveHistoricalBranchBoundaries(
+  source: OrchestrationThread,
+  native: ProviderThreadSnapshot,
+): ReadonlyArray<{ readonly messageId: MessageId; readonly turnId: TurnId }> {
+  const projected = source.messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({
+      messageId: message.id,
+      role: message.role,
+      text: message.text.trim(),
+      turnId: message.turnId,
+    }));
+  const nativeMessages = native.turns.flatMap((turn) =>
+    turn.items.flatMap((item) => {
+      const message = nativeItemText(item);
+      return message === null ? [] : [{ ...message, turnId: turn.id }];
+    }),
+  );
+  if (projected.length === 0 || nativeMessages.length < projected.length) {
+    return [];
+  }
+
+  const matchingStarts: number[] = [];
+  for (let start = 0; start <= nativeMessages.length - projected.length; start += 1) {
+    let matches = true;
+    for (let index = 0; index < projected.length; index += 1) {
+      const projectedMessage = projected[index]!;
+      const nativeMessage = nativeMessages[start + index]!;
+      if (
+        projectedMessage.role !== nativeMessage.role ||
+        projectedMessage.text !== nativeMessage.text ||
+        (projectedMessage.turnId !== null && projectedMessage.turnId !== nativeMessage.turnId)
+      ) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) matchingStarts.push(start);
+  }
+  if (matchingStarts.length !== 1) {
+    return [];
+  }
+
+  const start = matchingStarts[0]!;
+  return projected.flatMap((message, index) => {
+    if (message.role !== "assistant" || message.turnId !== null) return [];
+    return [
+      {
+        messageId: message.messageId,
+        turnId: nativeMessages[start + index]!.turnId,
+      },
+    ];
+  });
 }
 
 function nativeTimestamp(seconds: number | null, fallback: string): string {
@@ -285,6 +346,9 @@ export interface ThreadImportServiceShape {
   readonly commit: (
     input: ThreadImportCommitInput,
   ) => Effect.Effect<ThreadImportCommitResult, ThreadImportError>;
+  readonly branchBoundaries: (
+    input: ThreadBranchBoundariesInput,
+  ) => Effect.Effect<ThreadBranchBoundariesResult, ThreadImportError>;
   readonly branch: (
     input: ThreadBranchInput,
   ) => Effect.Effect<ThreadBranchResult, ThreadImportError>;
@@ -639,6 +703,62 @@ export const makeThreadImportService = (input: {
       return { projectId: request.projectId, results } satisfies ThreadImportCommitResult;
     });
 
+  const readHistoricalBoundaries = (source: OrchestrationThread) =>
+    Effect.gen(function* () {
+      const hasHistoricalAssistant = source.messages.some(
+        (message) => message.role === "assistant" && message.turnId === null && !message.streaming,
+      );
+      if (!hasHistoricalAssistant) return [];
+
+      const sourceBinding = Option.getOrUndefined(
+        yield* providerSessions
+          .getBinding(source.id)
+          .pipe(
+            Effect.mapError(() =>
+              error(
+                "provider-unavailable",
+                `Native Codex state for '${source.id}' is unavailable.`,
+              ),
+            ),
+          ),
+      );
+      if (sourceBinding?.provider !== CODEX_DRIVER || providerService.readThread === undefined) {
+        return [];
+      }
+
+      const native = yield* providerService
+        .readThread({ threadId: source.id })
+        .pipe(
+          Effect.mapError((cause) =>
+            error(
+              "provider-unavailable",
+              cause instanceof Error
+                ? cause.message
+                : `Native Codex history for '${source.id}' is unavailable.`,
+            ),
+          ),
+        );
+      return resolveHistoricalBranchBoundaries(source, native);
+    });
+
+  const branchBoundaries = (request: ThreadBranchBoundariesInput) =>
+    Effect.gen(function* () {
+      const source = yield* projection.getThreadDetailById(request.threadId).pipe(
+        Effect.map(Option.getOrUndefined),
+        Effect.mapError(() =>
+          error("thread-not-found", `Thread '${request.threadId}' could not be read.`),
+        ),
+      );
+      if (source === undefined) {
+        return yield* Effect.fail(
+          error("thread-not-found", `Thread '${request.threadId}' could not be read.`),
+        );
+      }
+      return {
+        boundaries: yield* readHistoricalBoundaries(source),
+      } satisfies ThreadBranchBoundariesResult;
+    });
+
   const branch = (request: ThreadBranchInput) =>
     Effect.gen(function* () {
       const source = yield* projection.getThreadDetailById(request.threadId).pipe(
@@ -655,18 +775,28 @@ export const makeThreadImportService = (input: {
 
       const selectedAssistant = source.messages.find(
         (message) =>
-          message.role === "assistant" &&
-          message.turnId === request.lastTurnId &&
-          !message.streaming,
+          message.id === request.messageId && message.role === "assistant" && !message.streaming,
       );
-      if (
-        selectedAssistant === undefined ||
-        (source.latestTurn?.turnId === request.lastTurnId && source.latestTurn.state === "running")
-      ) {
+      if (selectedAssistant === undefined || source.latestTurn?.state === "running") {
         return yield* Effect.fail(
           error(
             "turn-not-forkable",
-            `Turn '${request.lastTurnId}' is not a completed assistant response that can be forked.`,
+            `Message '${request.messageId}' is not a completed assistant response that can be forked.`,
+          ),
+        );
+      }
+
+      const historicalBoundary =
+        selectedAssistant.turnId === null
+          ? (yield* readHistoricalBoundaries(source)).find(
+              (boundary) => boundary.messageId === selectedAssistant.id,
+            )?.turnId
+          : selectedAssistant.turnId;
+      if (historicalBoundary === undefined || historicalBoundary !== request.lastTurnId) {
+        return yield* Effect.fail(
+          error(
+            "turn-not-forkable",
+            `Message '${request.messageId}' does not have a proven native Codex turn boundary.`,
           ),
         );
       }
@@ -706,7 +836,7 @@ export const makeThreadImportService = (input: {
       }
       const forked = yield* forkNative({
         threadId: request.threadId,
-        lastTurnId: request.lastTurnId,
+        lastTurnId: historicalBoundary,
       }).pipe(
         Effect.mapError((cause) =>
           error(
@@ -720,14 +850,14 @@ export const makeThreadImportService = (input: {
           error("fork-failed", "Codex returned the source thread instead of a new fork."),
         );
       }
-      if (!forked.turns.some((turn) => turn.id === request.lastTurnId)) {
+      if (!forked.turns.some((turn) => turn.id === historicalBoundary)) {
         return yield* Effect.fail(
           error("fork-failed", "Codex fork did not include the selected turn boundary."),
         );
       }
 
       const timestamp = yield* nowIso;
-      const messages = branchMessages(forked, timestamp, request.lastTurnId);
+      const messages = branchMessages(forked, timestamp, historicalBoundary);
       if (messages.length === 0) {
         return yield* Effect.fail(
           error("fork-failed", "Codex fork returned no readable conversation messages."),
@@ -790,6 +920,8 @@ export const makeThreadImportService = (input: {
   return {
     scan: (request) => scan(request).pipe(Effect.mapError(mapThreadImportError)),
     commit: (request) => commit(request).pipe(Effect.mapError(mapThreadImportError)),
+    branchBoundaries: (request) =>
+      branchBoundaries(request).pipe(Effect.mapError(mapThreadImportError)),
     branch: (request) => branch(request).pipe(Effect.mapError(mapThreadImportError)),
   };
 };

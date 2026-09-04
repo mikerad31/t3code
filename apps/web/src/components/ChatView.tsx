@@ -2960,19 +2960,42 @@ function ChatViewContent(props: ChatViewProps) {
     !isWorking &&
     activeThread !== undefined &&
     activeProviderStatus?.driver === "codex";
+  const hasHistoricalBranchableMessages =
+    canBranchInNewChat &&
+    activeThread?.messages.some(
+      (message) => message.role === "assistant" && message.turnId === null && !message.streaming,
+    ) === true;
+  const branchBoundariesQuery = useEnvironmentQuery(
+    hasHistoricalBranchableMessages && activeThread !== undefined
+      ? serverEnvironment.threadBranchBoundaries({
+          environmentId: activeThread.environmentId,
+          input: { threadId: activeThread.id },
+        })
+      : null,
+  );
+  const historicalBranchTurnIds = useMemo(
+    () =>
+      new Map(
+        (branchBoundariesQuery.data?.boundaries ?? []).map(
+          ({ messageId, turnId }) => [messageId, turnId] as const,
+        ),
+      ),
+    [branchBoundariesQuery.data],
+  );
   const handleBranchInNewChat = useCallback(
-    async (lastTurnId: TurnId) => {
+    async ({ messageId, turnId }: { readonly messageId: MessageId; readonly turnId: TurnId }) => {
       const sourceThread = activeThread;
       if (!canBranchInNewChat || sourceThread === undefined || branchingTurnId !== null) {
         return;
       }
-      setBranchingTurnId(lastTurnId);
+      setBranchingTurnId(turnId);
       try {
         const result = await branchThread({
           environmentId: sourceThread.environmentId,
           input: {
             threadId: sourceThread.id,
-            lastTurnId,
+            messageId,
+            lastTurnId: turnId,
           },
         });
         if (result._tag === "Failure") {
@@ -7298,6 +7321,7 @@ function ChatViewContent(props: ChatViewProps) {
                 workspaceRoot={activeWorkspaceRoot}
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
                 onBranchInNewChat={canBranchInNewChat ? handleBranchInNewChat : undefined}
+                branchableTurnIdByMessageId={historicalBranchTurnIds}
                 branchingTurnId={branchingTurnId}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}

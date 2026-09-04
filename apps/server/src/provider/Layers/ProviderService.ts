@@ -53,7 +53,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type { ProviderAdapterShape, ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -155,6 +155,10 @@ const ProviderRollbackConversationInput = Schema.Struct({
 const ProviderForkThreadInput = Schema.Struct({
   threadId: ThreadId,
   lastTurnId: TurnId,
+});
+
+const ProviderReadThreadInput = Schema.Struct({
+  threadId: ThreadId,
 });
 
 function toValidationError(
@@ -1509,6 +1513,40 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
+  const readThread: NonNullable<ProviderServiceMethod<"readThread">> = Effect.fn(
+    "ProviderService.readThread",
+  )(function* (rawInput) {
+    const input = yield* decodeInputOrValidationError({
+      operation: "ProviderService.readThread",
+      schema: ProviderReadThreadInput,
+      payload: rawInput,
+    });
+
+    return yield* withSessionLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.readThread",
+          allowRecovery: true,
+        });
+        if (!routed.isActive) {
+          return yield* toValidationError(
+            "ProviderService.readThread",
+            `Cannot read thread '${input.threadId}' because its provider session is not active.`,
+          );
+        }
+        yield* Effect.annotateCurrentSpan({
+          "provider.operation": "read-thread",
+          "provider.kind": routed.adapter.provider,
+          "provider.instance_id": routed.instanceId,
+          "provider.thread_id": input.threadId,
+        });
+        return yield* routed.adapter.readThread(input.threadId);
+      }),
+    );
+  });
+
   const forkThread: NonNullable<ProviderServiceMethod<"forkThread">> = Effect.fn(
     "ProviderService.forkThread",
   )(function* (rawInput) {
@@ -1749,6 +1787,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     getCapabilities,
     getInstanceInfo,
+    readThread,
     forkThread,
     rollbackConversation,
     uploadFeedback,

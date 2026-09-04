@@ -358,6 +358,22 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("lucide-git-branch");
   });
 
+  it("renders a branch action for a historical assistant with a proven native boundary", () => {
+    const turnId = TurnId.make("turn-historical-branchable");
+    const assistant = buildAssistantTimelineEntry("An imported completed answer.");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onBranchInNewChat={() => {}}
+        branchableTurnIdByMessageId={new Map([[assistant.message.id, turnId]])}
+        timelineEntries={[assistant]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Branch in new chat"');
+    expect(markup).toContain("lucide-git-branch");
+  });
+
   it("does not expose branching while the turn is still running", () => {
     const turnId = TurnId.make("turn-still-running");
     const assistant = buildAssistantTimelineEntry("Still working.");

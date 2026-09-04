@@ -117,10 +117,28 @@ export class ThreadImportError extends Schema.TaggedErrorClass<ThreadImportError
 /** Branch one completed native Codex turn into a new T3 conversation. */
 export const ThreadBranchInput = Schema.Struct({
   threadId: ThreadId,
+  /** T3 message whose native assistant response is being branched. */
+  messageId: MessageId,
   /** Native Codex turn id; the fork boundary is inclusive. */
   lastTurnId: TurnId,
 });
 export type ThreadBranchInput = typeof ThreadBranchInput.Type;
+
+export const ThreadBranchBoundary = Schema.Struct({
+  messageId: MessageId,
+  turnId: TurnId,
+});
+export type ThreadBranchBoundary = typeof ThreadBranchBoundary.Type;
+
+export const ThreadBranchBoundariesInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ThreadBranchBoundariesInput = typeof ThreadBranchBoundariesInput.Type;
+
+export const ThreadBranchBoundariesResult = Schema.Struct({
+  boundaries: Schema.Array(ThreadBranchBoundary),
+});
+export type ThreadBranchBoundariesResult = typeof ThreadBranchBoundariesResult.Type;
 
 export const ThreadBranchResult = Schema.Struct({
   threadId: ThreadId,

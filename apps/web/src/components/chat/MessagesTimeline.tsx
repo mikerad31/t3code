@@ -175,7 +175,10 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
-  onBranchInNewChat?: ((turnId: TurnId) => void) | undefined;
+  onBranchInNewChat?:
+    | ((input: { readonly messageId: MessageId; readonly turnId: TurnId }) => void)
+    | undefined;
+  branchableTurnIdByMessageId: ReadonlyMap<MessageId, TurnId>;
   branchingTurnId: TurnId | null;
 }
 
@@ -221,6 +224,7 @@ function TimelineLoadEarlierHeader({
 }
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_BRANCHABLE_TURN_IDS = new Map<MessageId, TurnId>();
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -276,7 +280,10 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
-  onBranchInNewChat?: ((turnId: TurnId) => void) | undefined;
+  onBranchInNewChat?:
+    | ((input: { readonly messageId: MessageId; readonly turnId: TurnId }) => void)
+    | undefined;
+  branchableTurnIdByMessageId?: ReadonlyMap<MessageId, TurnId> | undefined;
   branchingTurnId?: TurnId | null;
 }
 
@@ -320,6 +327,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   topFadeEnabled = false,
   loadEarlier = null,
   onBranchInNewChat,
+  branchableTurnIdByMessageId = EMPTY_BRANCHABLE_TURN_IDS,
   branchingTurnId = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
@@ -636,6 +644,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onBranchInNewChat,
+      branchableTurnIdByMessageId,
       branchingTurnId,
     }),
     [
@@ -657,6 +666,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       onOpenAgents,
       onBranchInNewChat,
+      branchableTurnIdByMessageId,
       branchingTurnId,
     ],
   );
@@ -1370,7 +1380,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
 
 function AssistantBranchButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const turnId = row.message.turnId;
+  const turnId = row.message.turnId ?? ctx.branchableTurnIdByMessageId.get(row.message.id) ?? null;
   if (!ctx.onBranchInNewChat || !turnId || !row.showAssistantMeta) {
     return null;
   }
@@ -1388,7 +1398,7 @@ function AssistantBranchButton({ row }: { row: Extract<TimelineRow, { kind: "mes
             disabled={busy}
             aria-label="Branch in new chat"
             aria-busy={active || undefined}
-            onClick={() => ctx.onBranchInNewChat?.(turnId)}
+            onClick={() => ctx.onBranchInNewChat?.({ messageId: row.message.id, turnId })}
           />
         }
       >

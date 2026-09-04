@@ -89,6 +89,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.providerUploadFeedback]: AuthOrchestrationOperateScope,
   [WS_METHODS.threadImportsScan]: AuthOrchestrationReadScope,
   [WS_METHODS.threadImportsCommit]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadBranchBoundaries]: AuthOrchestrationReadScope,
   [WS_METHODS.threadBranch]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerConsumeRateLimitResetCredit]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeVcsStatus]: AuthOrchestrationReadScope,
